@@ -1,11 +1,18 @@
 #pragma once
 
+#include <span>
+#include <memory>
 #include <string>
+#include <array>
 
 namespace axomotor::lte_modem {
 
+namespace internal {
+
 enum class at_cmd_t
 {
+    NONE        = -1, //
+
     AT          = 0, // Check command
     A_SLASH     = 1, // Re-issues the Last Command Given
     D           = 2, // Mobile Originated Call to Dial A Number
@@ -196,6 +203,17 @@ enum class at_cmd_t
     CNTPCID     = 901, // Set GPRS Bearer Profile’s ID
     CNTP        = 902, // Synchronize Network Time
 
+    SMCONF      = 1001, // Set MQTT Parameter
+    CSSLCFG     = 1002, // SSL Configure
+    SMSSL       = 1003, // Select SSL Configure
+    SMCONN      = 1004, // MQTT Connection
+    SMPUB       = 1005, // Send Packet
+    SMSUB       = 1006, // Subscribe Packet
+    SMUNSUB     = 1007, // Unsubscribe Packet
+    SMSTATE     = 1008, // Inquire MQTT Connection Status
+    SMPUBHEX    = 1009, // Set SMPUB Data Format to Hex
+    SMDISC      = 1010, // Disconnection MQTT
+
     CGNSPWR     = 1201, // GNSS Power Control
     CGNSINF     = 1202, // GNSS Navigation Information Parsed From NMEA Sentences
     CGNSURC     = 1203, // GNSS Navigation URC Report
@@ -224,19 +242,20 @@ enum class at_cmd_type_t
     EXTENDED    // AT+<x>
 };
 
-enum class result_code_t
+enum class at_cmd_result_t
 {
-    Unknown = -1,
-    Ok = 0,
-    Error = 1,
-    CME_Error = 2,
-    CMS_Error = 3,
-    Timeout = 4,
-    NoAnswer = 5,
+    UNKNOWN,
+    OK,
+    ERROR,
+    CME_ERROR,
+    CMS_ERROR,
+    NO_ANSWER,
+    BUFFER_OVF
 };
 
 enum class cme_error_code_t
 {
+    NO_CODE = -1,
     PHONE_FAILURE = 0,
     NO_CONNECTION_TO_PHONE = 1,
     PHONE_ADAPTOR_LINK_RESERVED = 2,
@@ -354,6 +373,7 @@ enum class cme_error_code_t
 
 enum class cms_error_code_t
 {
+    NO_CODE = -1,
     UNASSIGNED_NUMBER = 1,
     NO_ROUTE_TO_DESTINATION = 3,
     CHANNEL_UNACCEPTABLE = 6,
@@ -483,6 +503,15 @@ enum class cms_error_code_t
     DOING_SIM_REFRESH = 532
 };
 
+enum class parse_state_t
+{
+    WAITING_HEADER,
+    IN_BODY,
+    WAITING_TERMINATOR,
+    COMPLETED,
+    ERROR
+};
+
 struct at_cmd_def_t
 {
     at_cmd_t command;
@@ -493,21 +522,174 @@ struct at_cmd_def_t
 
 struct result_code_def_t 
 {
-    result_code_t code;
+    at_cmd_result_t code;
     const char *string;
 };
 
-struct cmd_response_t
+struct sim7000_cmd_result_info_t
 {
+    at_cmd_result_t result;
+    int error_code;
+    std::string response;
+    
+    void reset() 
+    {
+        result = at_cmd_result_t::UNKNOWN;
+        error_code = -1;
+        response.clear();
+    }
+};
+
+struct sim7000_cmd_context_t
+{
+    sim7000_cmd_context_t() { reset(); }
+
     at_cmd_t command;
-    cme_error_code_t cme_code;
-    cms_error_code_t cms_code;
-    result_code_t result;
-    std::string payload;
+    bool is_raw;
+    bool is_partial;
+    bool ignore_response;
+    bool response_received;
+
+    void reset()
+    {
+        command = at_cmd_t::NONE;
+        is_raw = false;
+        is_partial = false;
+        ignore_response = false;
+        response_received = false;
+    }
+};
+
+struct sim7000_status_t
+{
+    bool is_echo_disabled : 1;
+    bool is_grps_active : 1;
+    bool is_tcp_active : 1;
+    bool is_ip_active : 1;
+    bool is_active : 1;
+
+    bool is_gnss_turned_on : 1;
+    bool is_gnss_urc_enabled : 1;
+    bool is_mqtt_enabled : 1;
 };
 
 const at_cmd_def_t *get_command_def(at_cmd_t command);
 
-const result_code_def_t *get_result_code_def(result_code_t code);
+const result_code_def_t *get_result_code_def(at_cmd_result_t code);
+
+} // namespace internal
+
+/* Estructuras de datos de alto nivel */
+
+enum class sim_status_t
+{
+    READY,
+    PIN_REQUIRED,
+    PUK_REQUIRED,
+    PHONE_REQUIRED
+};
+
+enum class signal_strength_t 
+{
+    NOT_DETECTABLE,
+    MARGINAL,
+    GOOD,
+    EXCELLENT,
+};
+
+enum class network_reg_status_t 
+{
+    UNKNOWN,
+    NOT_REGISTERED,
+    REGISTERED,
+    TRYING_TO_REGISTER,
+    REGISTRATION_DENIED,
+    REGISTERED_ROAMING,
+};
+
+enum class connection_status_t
+{
+    UNKNOWN,
+    IP_INITIAL,
+    IP_START,
+    IP_CONFIG,
+    IP_GPRSACT,
+    IP_STATUS,
+    CONNECTING,
+    CONNECT_OK,
+    CLOSING,
+    CLOSED,
+    PDP_DEACT,
+};
+
+enum class bearer_status_t
+{
+    UNKNOWN,
+    CONNECTING,
+    CONNECTED,
+    CLOSING,
+    CLOSED,
+};
+
+enum class network_active_status_t
+{
+    UNKNOWN,
+    DEACTIVED,
+    ACTIVED,
+    IN_OPERATION,
+};
+
+enum class network_active_mode_t
+{
+    UNKNOWN,
+    DEACTIVE,
+    ACTIVE,
+    AUTO_ACTIVE,
+};
+
+enum class operator_netact_t
+{
+    UNKNOWN,
+    USER_SPECIFIED,
+    GSM_COMPACT,
+    GSM_EGPRS,
+    LTE_M1_A_GB,
+    LTE_NB_S1
+};
+
+struct apn_config_t
+{
+    char apn[64];
+    char user[32];
+    char pwd[32];
+    uint8_t cid;
+};
+
+struct gnss_nav_info_t 
+{
+    uint64_t date_time; // 20250627222325
+    float latitude;
+    float longitude;
+    float msl_altitude;
+    float speed_over_ground;
+    float course_over_ground;
+    uint8_t gnss_satellites;
+    uint8_t gps_satellites;
+    uint8_t run_status      : 1;
+    uint8_t fix_status      : 1;
+    uint8_t fix_mode        : 2;
+};
+
+struct mqtt_config_t
+{
+    char client_id[32];
+    char broker[64];
+    char username[32];
+    char password[32];
+    uint32_t port;
+    uint16_t keep_time;
+    bool session_cleaning;
+    uint8_t qos;
+};
 
 } // namespace axomotor::lte_mode

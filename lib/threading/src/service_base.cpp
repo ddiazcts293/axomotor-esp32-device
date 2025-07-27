@@ -37,7 +37,7 @@ ServiceBase::~ServiceBase()
     }
 }
 
-esp_err_t ServiceBase::start()
+esp_err_t ServiceBase::start(bool wait_for_setup)
 {
     // obtiene el nombre del servicio
     const char *name = m_pthread_config.thread_name;
@@ -45,8 +45,7 @@ esp_err_t ServiceBase::start()
     uint32_t flags = m_event_group.get_flags();
 
     // verifica si el servicio ya fue iniciado anteriormente
-    if (flags & SERVICE_STARTED_BIT)
-    {
+    if (flags & SERVICE_STARTED_BIT) {
         ESP_LOGW(TAG, "Service '%s' is already running", name);
         return ESP_ERR_INVALID_STATE;
     }
@@ -54,8 +53,7 @@ esp_err_t ServiceBase::start()
     // establece la configuración del servicio para usarse en la 
     // inicialización posterior del mismo
     esp_err_t result = esp_pthread_set_cfg(&m_pthread_config);
-    if (result)
-    {
+    if (result) {
         ESP_LOGE(
             TAG,
             "Service '%s' pthread configuration failed (%s)",
@@ -79,10 +77,21 @@ esp_err_t ServiceBase::start()
     );
 
     // verifica si no se pudo inicializar el servicio
-    if ((flags & SERVICE_STARTED_BIT) == 0)
-    {
+    if ((flags & SERVICE_STARTED_BIT) == 0) {
         ESP_LOGW(TAG, "Task start timed out");
         return ESP_ERR_TIMEOUT;
+    }
+    
+    if (wait_for_setup) {
+        ESP_LOGI(TAG, "Waiting for setup completed");
+
+        flags = m_event_group.wait_for_flags(
+            SERVICE_SETUP_COMPLETED_BIT | SERVICE_SETUP_FAILED_BIT);
+
+        if (flags & SERVICE_SETUP_FAILED_BIT) {
+            ESP_LOGE(TAG, "Task setup failed");
+            return ESP_FAIL;
+        }
     }
 
     return ESP_OK;
@@ -162,7 +171,7 @@ void ServiceBase::run()
     if (setup_result == ESP_OK) {
         ESP_LOGD(TAG, "Service '%s' setup is completed", name);
 
-        // ejecuta el bucle del servicio mientras no se solicite deternerlo
+        // ejecuta el bucle del servicio hasta recibir la solicitud de alto
         while ((m_event_group.get_flags() & SERVICE_STOP_REQUESTED_BIT) == 0) {
             loop();
         }

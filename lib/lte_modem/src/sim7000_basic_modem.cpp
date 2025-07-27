@@ -1,0 +1,333 @@
+#include "sim7000_modem.hpp"
+#include "sim7000_types.hpp"
+#include "sim7000_helpers.hpp"
+
+#include <cstring>
+#include <string>
+#include <esp_log.h>
+
+namespace axomotor::lte_modem {
+
+#define MODEM_AVAILABLE_BIT     BIT0
+#define RESPONSE_STARTED_BIT    BIT1
+#define RESPONSE_COMPLETED_BIT  BIT2
+
+#define NULL_CH     '\0'
+#define CRLF        "\r\n"
+#define CR          '\r'
+#define LF          '\n'
+
+using namespace axomotor::lte_modem::internal;
+using Parser = SIM7000_BasicModem;
+
+static const char *TAG = "sim7000:at_modem";
+
+/* SIM7000 Basic Modem */
+
+SIM7000_BasicModem::SIM7000_BasicModem(size_t buffer_size) :
+    m_cmd_context{},
+    m_parser_event_group{}
+{
+    m_parser_buffer.reserve(buffer_size);
+    m_parser_event_group.set_flags(MODEM_AVAILABLE_BIT);
+}
+
+esp_err_t SIM7000_BasicModem::execute_cmd(
+    internal::at_cmd_t command,
+    std::shared_ptr<internal::sim7000_cmd_result_info_t> result_info,
+    TickType_t ticks_to_wait,
+    bool ignore_response,
+    bool is_partial,
+    bool is_raw
+)
+{
+    return execute_cmd(
+        command,
+        std::span<const char>(),
+        result_info,
+        ticks_to_wait,
+        ignore_response,
+        is_partial,
+        is_raw
+    );
+}
+
+esp_err_t SIM7000_BasicModem::execute_cmd(
+    internal::at_cmd_t command,
+    const std::span<const char> &payload,
+    std::shared_ptr<internal::sim7000_cmd_result_info_t> result_info,
+    TickType_t ticks_to_wait,
+    bool ignore_response,
+    bool is_partial,
+    bool is_raw
+)
+{
+    // verifica si se recibió un puntero en donde guardar el resultado del
+    // comando
+    if (!result_info) return ESP_ERR_INVALID_ARG;
+    result_info->reset();
+    
+    // obtiene la definición del comando recibido
+    const at_cmd_def_t *cmd_def = get_command_def(command);
+    if (cmd_def == nullptr) return ESP_ERR_INVALID_ARG;
+    
+    // espera a que el modem esté disponible
+    m_parser_event_group.wait_for_flags(MODEM_AVAILABLE_BIT, true);
+
+    const char *cmd_string = cmd_def->string;
+    const char cmd_end = CR;
+    int wlen = 0;
+    esp_err_t result;
+    bool ack;
+
+    // establece el contexto del comando
+    m_cmd_context.command = command;
+    m_cmd_context.is_partial = is_partial;
+    m_cmd_context.is_raw = is_raw;
+    m_cmd_context.ignore_response = ignore_response;
+    m_result_info = result_info;
+
+    // comienza con la escritura de los comando en el puerto UART
+    wlen = on_cmd_write("AT", 2);
+
+    switch (cmd_def->type) {
+        case at_cmd_type_t::BASIC:
+            wlen += on_cmd_write(cmd_string, strlen(cmd_string));
+            break;
+        case at_cmd_type_t::S_PARAM:
+            wlen += on_cmd_write(cmd_string, strlen(cmd_string));
+            wlen += on_cmd_write("=", 1);
+            break;
+        case at_cmd_type_t::EXTENDED:
+            wlen += on_cmd_write("+", 1);
+            wlen += on_cmd_write(cmd_string, strlen(cmd_string));
+            break;
+        default:
+            break;
+    }
+
+    // verifica si hay datos adicionales a enviar
+    if (!payload.empty()) {
+        wlen += on_cmd_write(payload.data(), payload.size());
+    }
+
+    // escribe un caracter de retorno de carro para indicar ejecutar el comando
+    wlen += on_cmd_write(&cmd_end, 1);
+    ESP_LOGI(TAG, "Executing AT command '%s' (%d bytes written)...", cmd_string, wlen);
+
+    // verifica si el tiempo de espera no es indefinido
+    if (ticks_to_wait != portMAX_DELAY)
+    {
+        // verifica si el comando define un tiempo máximo de respuesta
+        if (cmd_def->max_response_time != 0) {
+            // ignora el tiempo indicado en la función y  en su lugar utiliza
+            // el que está definido para el comando (está en segundos)
+            ticks_to_wait = cmd_def->max_response_time * 1000;
+        }
+
+        // añade 100 ms al tiempo de espera
+        ticks_to_wait += pdMS_TO_TICKS(100);
+    }
+
+    // espera hasta recibir la confirmación de que se ha empezado a leer la 
+    // respuesta o hasta que el tiempo de espera se haya agotado
+    ack = m_parser_event_group.wait_for_flags(
+        RESPONSE_STARTED_BIT, // bit de confirmación
+        true, // borra el bit una vez recibido
+        false, // solo espera un bit
+        ticks_to_wait // tiempo de espera
+    );
+
+    // verifica si se recibio la confirmación de respuesta recibida
+    if (ack) {
+        // espera hasta recibir la confirmación de respuesta completada
+        ack = m_parser_event_group.wait_for_flags(
+            RESPONSE_COMPLETED_BIT, // bit de confirmación
+            true, // borra el bit una vez recibido
+            false, // solo espera un bit
+            portMAX_DELAY // tiempo de espera
+        );
+    }
+
+    // verifica si se ha recibido la respuesta
+    if (ack) {
+        switch (result_info->result) {
+            case at_cmd_result_t::OK:
+                if (result_info->response.length() > 0) {
+                    ESP_LOGI(
+                        TAG,
+                        "Command execution successful (%u bytes received)",
+                        result_info->response.length()
+                    );
+
+                    ESP_LOG_BUFFER_HEX(
+                        TAG, 
+                        result_info->response.c_str(),
+                        result_info->response.length()
+                    );
+                } else {
+                    ESP_LOGI(TAG, "Command execution successful");
+                }
+                result = ESP_OK;
+                break;
+            case at_cmd_result_t::ERROR:
+                ESP_LOGE(TAG, "Command execution failed");
+                result = ESP_FAIL;
+                break;
+            case at_cmd_result_t::CME_ERROR:
+                ESP_LOGE(
+                    TAG,
+                    "Command execution failed due to Mobbile Equipment error (%d)",
+                    result_info->error_code
+                );
+                result = ESP_ERR_INVALID_STATE;
+                break;
+            case at_cmd_result_t::CMS_ERROR:
+                ESP_LOGE(
+                    TAG,
+                    "Command execution failed due to Message or Network error (%d)",
+                    result_info->error_code
+                );
+                result = ESP_ERR_NOT_ALLOWED;
+                break;
+            case at_cmd_result_t::BUFFER_OVF:
+                ESP_LOGE(TAG, "Failed to read command response (buffer overflow)");
+                result = ESP_ERR_INVALID_SIZE;
+                break;
+            default:
+                ESP_LOGE(TAG, "Unrecognized command response");
+                result = ESP_ERR_INVALID_RESPONSE;
+                break;
+        }
+    } else {
+        ESP_LOGW(TAG, "Response timed out");
+        result = ESP_ERR_TIMEOUT;
+    }
+
+    // restablece el contexto del comando
+    m_cmd_context.reset();
+    // hace que el modem esté disponible
+    m_parser_event_group.set_flags(MODEM_AVAILABLE_BIT);
+
+    return result;
+}
+
+void SIM7000_BasicModem::feed_buffer(const char *buffer, size_t length)
+{
+    // agrega la parte recibida al buffer
+    m_parser_buffer.append(buffer, length);
+    try_parse();
+}
+
+void SIM7000_BasicModem::try_parse()
+{
+    // verifica si actualmente se está ejecutando un comando
+    if (!m_result_info.expired()) {
+        // verifica si no se ha marcado el comienzo de la respuesta
+        if (!m_cmd_context.response_received) {
+            // notifica al receptor que se ha comenzado a recibir una respuesta
+            m_parser_event_group.set_flags(RESPONSE_STARTED_BIT);
+            m_cmd_context.response_received = true;
+        }
+
+        // verifica si se debe recibir una respuesta en crudo
+        if (m_cmd_context.is_raw) {
+            auto cmd_result = m_result_info.lock();
+            // agrega el contenido obtenido
+            cmd_result->response.append(m_parser_buffer);
+            
+            // verifica si el contenido del buffer termina en \r\n
+            if (m_parser_buffer.ends_with(CRLF)) {
+
+                // establece los valores de resultado
+                cmd_result->result = at_cmd_result_t::OK;
+                // notifica que se ha recibido una respuesta
+                m_parser_event_group.set_flags(RESPONSE_COMPLETED_BIT);  
+            } 
+
+            // borra el contenido del buffer
+            m_parser_buffer.clear();
+
+            // termina la función puesto que no necesita comprobar el formato
+            // de la respuesta
+            return;
+        }
+    }
+
+    bool is_completed = false;
+    size_t position;
+    
+    // busca el siguiente salto de línea
+    while ((position = m_parser_buffer.find(CRLF)) != std::string::npos) {
+        // copia la linea y la borra del buffer
+        std::string line = m_parser_buffer.substr(0, position);
+        m_parser_buffer.erase(0, position + 2);
+
+        // omite el proceso si la línea está vacía
+        if (line.empty()) continue;
+
+        // verifica si actualmente se está ejecutando un comando
+        if (!m_result_info.expired()) {            
+            auto cmd_result = m_result_info.lock();
+            std::string &response = cmd_result->response;
+
+            // verifica el contenido de la línea
+            if (line == "OK") {
+                cmd_result->result = at_cmd_result_t::OK;
+                is_completed = true;
+            } else if (line == "ERROR") {
+                cmd_result->result = at_cmd_result_t::ERROR;
+                is_completed = true;
+            } else if (line.starts_with("+CME ERROR")) {
+                cmd_result->result = at_cmd_result_t::CME_ERROR;
+                cmd_result->error_code = read_error_code(line);
+                is_completed = true;
+            } else if (line.starts_with("+CMS ERROR")) {
+                cmd_result->result = at_cmd_result_t::CMS_ERROR;
+                cmd_result->error_code = read_error_code(line);
+                is_completed = true;
+            } 
+                
+            // verifica si el comando se ha completado
+            if (is_completed) {
+                // borra del final cualquier salto de línea excedente
+                while (response.ends_with(CRLF)) {
+                    response.erase(response.length() -2, 2);
+                }
+                
+                // notifica que se ha recibido una respuesta
+                m_parser_event_group.set_flags(RESPONSE_COMPLETED_BIT);
+            } else {
+                // si no ha terminado, agrega la línea al final de la respuesta
+                // junto a un final de la línea, puesto que forma parte de la
+                // respuesta
+                response.append(line);
+                response.append(CRLF);
+            }
+        } 
+        // de lo contrario, lo considera como un URC
+        else if (Parser::is_urc(line)) {
+            on_urc_message(line);
+            break;
+        }
+    }
+}
+
+bool SIM7000_BasicModem::is_urc(const std::string &line)
+{
+    return false;
+}
+
+int SIM7000_BasicModem::read_error_code(const std::string &line)
+{
+    int offset = line.find_first_of(": ");
+    int code = -1;
+
+    if (offset != std::string::npos && offset + 2 < line.length()) {
+        code = helpers::to_number<int>(line, offset + 2);
+    }
+
+    return code;
+}
+
+} // namespace axomotor::lte_modem

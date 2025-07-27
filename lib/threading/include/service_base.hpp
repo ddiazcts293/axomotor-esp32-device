@@ -17,7 +17,6 @@ class ServiceBase
 {
 public:
     constexpr static const TickType_t SERVICE_START_TIMEOUT = pdMS_TO_TICKS(500);
-    //constexpr static const TickType_t DEFAULT_TASK_DELAY = pdMS_TO_TICKS(10);
 
     ServiceBase(
         const char *name,
@@ -31,7 +30,7 @@ public:
     ServiceBase(ServiceBase &&) = delete;
     ~ServiceBase();
 
-    esp_err_t start();
+    esp_err_t start(bool wait_for_setup = false);
     esp_err_t stop();
     
     bool is_active() const;
@@ -51,7 +50,6 @@ private:
     EventGroup m_event_group;
     
     esp_pthread_cfg_t m_pthread_config;
-    //std::atomic<TickType_t> loop_delay;
     std::thread m_thread;
 
     void run();

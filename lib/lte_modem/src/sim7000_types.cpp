@@ -1,7 +1,6 @@
 #include "sim7000_types.hpp"
-#include <esp_err.h>
 
-namespace axomotor::lte_modem {
+namespace axomotor::lte_modem::internal {
 
 static const at_cmd_def_t AT_COMMANDS_TABLE[] =
 {
@@ -195,6 +194,17 @@ static const at_cmd_def_t AT_COMMANDS_TABLE[] =
     { at_cmd_t::CNTPCID, at_cmd_type_t::EXTENDED, "CNTPCID", 0 },
     { at_cmd_t::CNTP, at_cmd_type_t::EXTENDED, "CNTP", 0 },
 
+    { at_cmd_t::SMCONF, at_cmd_type_t::EXTENDED, "SMCONF", 0 },
+    { at_cmd_t::CSSLCFG, at_cmd_type_t::EXTENDED, "CSSLCFG", 0 },
+    { at_cmd_t::SMSSL, at_cmd_type_t::EXTENDED, "SMSSL", 0 },
+    { at_cmd_t::SMCONN, at_cmd_type_t::EXTENDED, "SMCONN", 0 },
+    { at_cmd_t::SMPUB, at_cmd_type_t::EXTENDED, "SMPUB", 0 },
+    { at_cmd_t::SMSUB, at_cmd_type_t::EXTENDED, "SMSUB", 0 },
+    { at_cmd_t::SMUNSUB, at_cmd_type_t::EXTENDED, "SMUNSUB", 0 },
+    { at_cmd_t::SMSTATE, at_cmd_type_t::EXTENDED, "SMSTATE", 0 },
+    { at_cmd_t::SMPUBHEX, at_cmd_type_t::EXTENDED, "SMPUBHEX", 0 },
+    { at_cmd_t::SMDISC, at_cmd_type_t::EXTENDED, "SMDISC", 0 },
+
     { at_cmd_t::CGNSPWR, at_cmd_type_t::EXTENDED, "CGNSPWR", 0 },
     { at_cmd_t::CGNSINF, at_cmd_type_t::EXTENDED, "CGNSINF", 0 },
     { at_cmd_t::CGNSURC, at_cmd_type_t::EXTENDED, "CGNSURC", 0 },
@@ -218,10 +228,10 @@ static const at_cmd_def_t AT_COMMANDS_TABLE[] =
 
 static const result_code_def_t RESULT_CODE_TABLE[] = 
 {
-    { result_code_t::Ok, "OK" },
-    { result_code_t::Error, "ERROR" },
-    { result_code_t::CME_Error, "+CME ERROR:" },
-    { result_code_t::CMS_Error, "+CMS ERROR:" }
+    { at_cmd_result_t::OK, "OK" },
+    { at_cmd_result_t::ERROR, "ERROR" },
+    { at_cmd_result_t::CME_ERROR, "+CME ERROR:" },
+    { at_cmd_result_t::CMS_ERROR, "+CMS ERROR:" }
 };
 
 const at_cmd_def_t *get_command_def(at_cmd_t command)
@@ -237,7 +247,7 @@ const at_cmd_def_t *get_command_def(at_cmd_t command)
     return nullptr;
 }
 
-const result_code_def_t *get_result_code_def(result_code_t code)
+const result_code_def_t *get_result_code_def(at_cmd_result_t code)
 {
     const int table_size = sizeof(RESULT_CODE_TABLE) / sizeof(result_code_def_t);
     
