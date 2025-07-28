@@ -3,8 +3,6 @@
 #include "sim7000_types.hpp"
 
 #include <memory>
-#include <mutex>
-
 #include <esp_err.h>
 #include <event_group.hpp>
 

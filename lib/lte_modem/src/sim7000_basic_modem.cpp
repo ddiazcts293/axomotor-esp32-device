@@ -14,13 +14,13 @@ namespace axomotor::lte_modem {
 
 #define NULL_CH     '\0'
 #define CRLF        "\r\n"
-#define CR          '\r'
+#define CR          "\r"
 #define LF          '\n'
 
 using namespace axomotor::lte_modem::internal;
 using Parser = SIM7000_BasicModem;
 
-static const char *TAG = "sim7000:at_modem";
+static const char *TAG = "sim7000:basic_modem";
 
 /* SIM7000 Basic Modem */
 
@@ -54,7 +54,7 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
 
 esp_err_t SIM7000_BasicModem::execute_cmd(
     internal::at_cmd_t command,
-    const std::span<const char> &payload,
+    const std::span<const char> &params,
     std::shared_ptr<internal::sim7000_cmd_result_info_t> result_info,
     TickType_t ticks_to_wait,
     bool ignore_response,
@@ -71,13 +71,12 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     const at_cmd_def_t *cmd_def = get_command_def(command);
     if (cmd_def == nullptr) return ESP_ERR_INVALID_ARG;
     
-    // espera a que el modem esté disponible
-    m_parser_event_group.wait_for_flags(MODEM_AVAILABLE_BIT, true);
+    // espera hasta que el modem esté disponible
+    m_parser_event_group.wait_for_flags(MODEM_AVAILABLE_BIT, true, true);
 
+    std::string cmd_line = "AT";
     const char *cmd_string = cmd_def->string;
-    const char cmd_end = CR;
-    int wlen = 0;
-    esp_err_t result;
+    esp_err_t err;
     bool ack;
 
     // establece el contexto del comando
@@ -88,32 +87,35 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     m_result_info = result_info;
 
     // comienza con la escritura de los comando en el puerto UART
-    wlen = on_cmd_write("AT", 2);
+    //wlen = on_cmd_write("AT", 2);
 
     switch (cmd_def->type) {
         case at_cmd_type_t::BASIC:
-            wlen += on_cmd_write(cmd_string, strlen(cmd_string));
+            cmd_line.append(cmd_string);
             break;
         case at_cmd_type_t::S_PARAM:
-            wlen += on_cmd_write(cmd_string, strlen(cmd_string));
-            wlen += on_cmd_write("=", 1);
+            //wlen += on_cmd_write(cmd_string, strlen(cmd_string));
+            cmd_line.append(cmd_line);
+            //wlen += on_cmd_write("=", 1);
+            cmd_line.append("=");
             break;
         case at_cmd_type_t::EXTENDED:
-            wlen += on_cmd_write("+", 1);
-            wlen += on_cmd_write(cmd_string, strlen(cmd_string));
+            cmd_line.append("+");
+            cmd_line.append(cmd_string);
             break;
         default:
             break;
     }
 
     // verifica si hay datos adicionales a enviar
-    if (!payload.empty()) {
-        wlen += on_cmd_write(payload.data(), payload.size());
+    if (!params.empty()) {
+        cmd_line.append(params.data(), params.size());
     }
 
     // escribe un caracter de retorno de carro para indicar ejecutar el comando
-    wlen += on_cmd_write(&cmd_end, 1);
-    ESP_LOGI(TAG, "Executing AT command '%s' (%d bytes written)...", cmd_string, wlen);
+    ESP_LOGI(TAG, "Executing '%s'...", cmd_line.c_str());
+    cmd_line.append(CR);
+    on_cmd_write(cmd_line.data(), cmd_line.length());
 
     // verifica si el tiempo de espera no es indefinido
     if (ticks_to_wait != portMAX_DELAY)
@@ -134,7 +136,7 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     ack = m_parser_event_group.wait_for_flags(
         RESPONSE_STARTED_BIT, // bit de confirmación
         true, // borra el bit una vez recibido
-        false, // solo espera un bit
+        true, // solo espera un bit
         ticks_to_wait // tiempo de espera
     );
 
@@ -144,8 +146,8 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
         ack = m_parser_event_group.wait_for_flags(
             RESPONSE_COMPLETED_BIT, // bit de confirmación
             true, // borra el bit una vez recibido
-            false, // solo espera un bit
-            portMAX_DELAY // tiempo de espera
+            true, // solo espera un bit
+            ticks_to_wait // tiempo de espera
         );
     }
 
@@ -168,11 +170,11 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
                 } else {
                     ESP_LOGI(TAG, "Command execution successful");
                 }
-                result = ESP_OK;
+                err = ESP_OK;
                 break;
             case at_cmd_result_t::ERROR:
                 ESP_LOGE(TAG, "Command execution failed");
-                result = ESP_FAIL;
+                err = ESP_FAIL;
                 break;
             case at_cmd_result_t::CME_ERROR:
                 ESP_LOGE(
@@ -180,7 +182,7 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
                     "Command execution failed due to Mobbile Equipment error (%d)",
                     result_info->error_code
                 );
-                result = ESP_ERR_INVALID_STATE;
+                err = ESP_ERR_INVALID_STATE;
                 break;
             case at_cmd_result_t::CMS_ERROR:
                 ESP_LOGE(
@@ -188,28 +190,29 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
                     "Command execution failed due to Message or Network error (%d)",
                     result_info->error_code
                 );
-                result = ESP_ERR_NOT_ALLOWED;
+                err = ESP_ERR_NOT_ALLOWED;
                 break;
             case at_cmd_result_t::BUFFER_OVF:
                 ESP_LOGE(TAG, "Failed to read command response (buffer overflow)");
-                result = ESP_ERR_INVALID_SIZE;
+                err = ESP_ERR_INVALID_SIZE;
                 break;
             default:
                 ESP_LOGE(TAG, "Unrecognized command response");
-                result = ESP_ERR_INVALID_RESPONSE;
+                err = ESP_ERR_INVALID_RESPONSE;
                 break;
         }
     } else {
         ESP_LOGW(TAG, "Response timed out");
-        result = ESP_ERR_TIMEOUT;
+        err = ESP_ERR_TIMEOUT;
     }
 
     // restablece el contexto del comando
     m_cmd_context.reset();
-    // hace que el modem esté disponible
+    m_result_info.reset();
+    // hace que el modem esté disponible de nuevo
     m_parser_event_group.set_flags(MODEM_AVAILABLE_BIT);
 
-    return result;
+    return err;
 }
 
 void SIM7000_BasicModem::feed_buffer(const char *buffer, size_t length)
@@ -238,7 +241,6 @@ void SIM7000_BasicModem::try_parse()
             
             // verifica si el contenido del buffer termina en \r\n
             if (m_parser_buffer.ends_with(CRLF)) {
-
                 // establece los valores de resultado
                 cmd_result->result = at_cmd_result_t::OK;
                 // notifica que se ha recibido una respuesta
@@ -266,8 +268,12 @@ void SIM7000_BasicModem::try_parse()
         // omite el proceso si la línea está vacía
         if (line.empty()) continue;
 
-        // verifica si actualmente se está ejecutando un comando
-        if (!m_result_info.expired()) {            
+        // verifica si el mensaje es un URC
+        if (check_if_is_urc(line)) {
+            on_urc_message(line);
+        }
+        // de lo contrario,verifica si actualmente se está ejecutando un comando
+        else if (!m_result_info.expired()) { 
             auto cmd_result = m_result_info.lock();
             std::string &response = cmd_result->response;
 
@@ -305,17 +311,12 @@ void SIM7000_BasicModem::try_parse()
                 response.append(CRLF);
             }
         } 
-        // de lo contrario, lo considera como un URC
-        else if (Parser::is_urc(line)) {
-            on_urc_message(line);
-            break;
-        }
     }
 }
 
 bool SIM7000_BasicModem::is_urc(const std::string &line)
 {
-    return false;
+    return check_if_is_urc(line);
 }
 
 int SIM7000_BasicModem::read_error_code(const std::string &line)
