@@ -5,17 +5,14 @@
 #include <cstring>
 #include <string>
 #include <array>
-#include <algorithm>
 
 #include <esp_log.h>
 #include <driver/uart.h>
 #include <driver/gpio.h>
 
-#define MODEM_AVAILABLE_BIT     BIT0
-#define RESPONSE_STARTED_BIT    BIT1
-#define RESPONSE_COMPLETED_BIT  BIT2
-
-#define NET_ACTIVE_STATUS_CHANGED_BIT   BIT3
+#define PDP_DEACT_BIT                   BIT0
+#define APP_PDP_ACTIVE_BIT              BIT1
+#define APP_PDP_DEACTIVE_BIT            BIT2
 
 #define NULL_CH     '\0'
 #define CRLF        "\r\n"
@@ -27,7 +24,7 @@ namespace axomotor::lte_modem {
 using namespace axomotor::lte_modem::internal;
 using Parser = SIM7000_BasicModem;
 
-static const char *TAG = "sim7000";
+static const char *TAG = "sim7000:modem";
 
 /* SIM7000 Modem */
 
@@ -168,10 +165,10 @@ esp_err_t SIM7000_Modem::set_apn(const apn_config_t &config)
             err = config_gprs();
         }
         if (err == ESP_OK && m_status.is_tcp_active) {
-            err = config_tcp();
+            err = config_tcp_tk();
         }
         if (err == ESP_OK && m_status.is_ip_active) {
-            err = config_ip();
+            err = config_ip_app();
         }
     }
 
@@ -441,9 +438,15 @@ esp_err_t SIM7000_Modem::get_local_ip(std::string &ip)
     result = execute_internal_cmd(at_cmd_t::CIFSR, 0, false, true);
     if (result == ESP_OK) {
         helpers::trim(response);
-        ip.assign(response);
-        ESP_LOGI(TAG, "Current IP: %s", ip.c_str());
-    } else {
+        if (response != "ERROR") {
+            ip.assign(response);
+            ESP_LOGI(TAG, "Current IP: %s", ip.c_str());
+        } else {
+            result = ESP_FAIL;
+        }
+    } 
+    
+    if (result != ESP_OK) {
         ESP_LOGW(TAG, "Failed to get local IP");
     }
 
@@ -457,7 +460,7 @@ esp_err_t SIM7000_Modem::activate_network()
     esp_err_t result = get_net_active_status(status);
 
     if (result == ESP_OK && status == network_active_status_t::DEACTIVED) {
-        result = set_net_active_status(network_active_mode_t::ACTIVE, true);
+        result = set_net_active_mode(network_active_mode_t::ACTIVE);
     }
 
     return result;
@@ -470,7 +473,7 @@ esp_err_t SIM7000_Modem::deactivate_network()
     esp_err_t result = get_net_active_status(status);
 
     if (result == ESP_OK && status != network_active_status_t::DEACTIVED) {
-        result = set_net_active_status(network_active_mode_t::DEACTIVE, true);
+        result = set_net_active_mode(network_active_mode_t::DEACTIVE);
     }
 
     return result;
@@ -479,18 +482,18 @@ esp_err_t SIM7000_Modem::deactivate_network()
 esp_err_t SIM7000_Modem::enable_comm()
 {
     ESP_LOGI(TAG, "Configuring GRPS...");
-    esp_err_t result = config_gprs();
+    esp_err_t err = config_gprs();
 
-    if (result == ESP_OK) {
-        ESP_LOGI(TAG, "Configuring TCP...");
-        result = config_tcp();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Configuring TCP APP Toolkit...");
+        err = config_tcp_tk();
     }
-    if (result == ESP_OK) {
+    if (err == ESP_OK) {
         ESP_LOGI(TAG, "Configuring IP...");
-        result = config_ip();
+        err = config_ip_app();
     }
 
-    return result;
+    return err;
 }
 
 /* Métodos generales de inicialización */
@@ -582,101 +585,103 @@ esp_err_t SIM7000_Modem::config_gprs()
     return result;
 }
 
-esp_err_t SIM7000_Modem::config_tcp()
+esp_err_t SIM7000_Modem::config_tcp_tk()
 {
     std::lock_guard lock(m_mutex);
-    std::string payload;
-    esp_err_t result;
+    std::string params;
+    esp_err_t err;
     connection_status_t conn_status;
 
     // obtiene el estado de conexión
-    result = get_connection_status(conn_status);
-    if (result == ESP_OK) {
+    err = get_connection_status(conn_status);
+    if (err == ESP_OK) {
         // lee el APN actual
-        result = read_grps_apn(payload);
+        err = read_tcptk_apn(params);
     }
 
-    if (result == ESP_OK) {
-        // verifica si el APN no ha sido establecido
-        if (payload == "CMNET") {
-            ESP_LOGI(TAG, "GPRS APN is not set");
+    if (err == ESP_OK) {
+        // verifica si el APN actualmente establecido es diferente al 
+        // provisto por la aplicación
+        if (params != m_apn.apn) {
+            ESP_LOGI(TAG, "TCP APP Toolkit APN is not set");
 
             // verifica si el estado de conexión no está inicializado
             if (conn_status != connection_status_t::IP_INITIAL) {
                 // desactiva GPRS
-                result = deactivate_gprs();
+                err = deact_tcptk_pdp_context();
             }
 
-            if (result == ESP_OK) {
-                // inicia GPRS con el APN configurado
-                result = start_gprs();
+            if (err == ESP_OK) {
+                // establece el TCP provisto
+                err = set_tcptk_apn();
             }
-        } else {
-            ESP_LOGI(TAG, "GPRS APN %s is set", payload.c_str());
+        } 
+        
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "TCP APP Toolkit APN is set to: %s", m_apn.apn);
         }
 
         // obtiene nuevamente el estado de conexión
-        result = get_connection_status(conn_status);
+        err = get_connection_status(conn_status);
     }
 
-    if (result == ESP_OK) {
+    if (err == ESP_OK) {
         //  el estado de la conexión debe ser IP start
         if (conn_status == connection_status_t::IP_START) {
-            // activa GPRS
-            result = activate_gprs();
+            err = bring_up_tcptk_conn();
         } else if (conn_status == connection_status_t::IP_STATUS) {
-            ESP_LOGI(TAG, "GPRS is already active");
+            ESP_LOGI(TAG, "Wireless Connection is already active");
         }
     }
 
-    if (result == ESP_OK) {
-        result = get_local_ip(payload);
+    if (err == ESP_OK) {
+        err = get_local_ip(params);
     }
 
-    if (result == ESP_OK) {
-        ESP_LOGI(TAG, "GPRS activation success | Local IP: %s", payload.c_str());
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "TCP APP Toolkit activation success | Local IP: %s", params.c_str());
     } else {
-        ESP_LOGE(TAG, "Failed to activate GPRS (%s)", esp_err_to_name(result));
+        ESP_LOGE(TAG, "Failed to activate GPRS (%s)", esp_err_to_name(err));
     }
 
-    return result;
+    return err;
 }
 
-esp_err_t SIM7000_Modem::config_ip()
+esp_err_t SIM7000_Modem::config_ip_app()
 {
     std::lock_guard lock(m_mutex);
     std::string ip;
-    esp_err_t result;
+    esp_err_t err;
     bearer_status_t bearer_status;
 
     // obtiene el estado del portador
-    result = query_bearer(bearer_status, &ip);
-    if (result == ESP_OK) {
+    err = query_bearer(bearer_status, &ip);
+    if (err == ESP_OK) {
         // verifica si el portador no está conectado
         if (bearer_status != bearer_status_t::CONNECTED) {
             ESP_LOGI(TAG, "Bearer is not connected, setting parameters...");
 
             if (strlen(m_apn.apn) > 0) {
-                result = set_bearer_param("APN", m_apn.apn);
+                err = set_bearer_param("APN", m_apn.apn);
             }
-            if (result == ESP_OK && strlen(m_apn.user) > 0) {
-                result = set_bearer_param("USER", m_apn.user);
+            if (err == ESP_OK && strlen(m_apn.user) > 0) {
+                err = set_bearer_param("USER", m_apn.user);
             }
-            if (result == ESP_OK && strlen(m_apn.user) > 0) {
-                result = set_bearer_param("PWD", m_apn.user);
+            if (err == ESP_OK && strlen(m_apn.user) > 0) {
+                err = set_bearer_param("PWD", m_apn.user);
             }
-            if (result == ESP_OK) {
-                result = open_bearer();
+            if (err == ESP_OK) {
+                err = open_bearer();
             }
-            if (result == ESP_OK) {
-                result = query_bearer(bearer_status, &ip);
+            if (err == ESP_OK) {
+                err = query_bearer(bearer_status, &ip);
             }
         } else {
             ESP_LOGI(TAG, "Bearer is already open");
         }
     }
 
-    if (result == ESP_OK) {
+    if (err == ESP_OK) {
         ESP_LOGI(TAG, "Bearer IP address: %s", ip.c_str());
     } else {
         ESP_LOGE(TAG, "Failed to configure bearer");
@@ -687,67 +692,78 @@ esp_err_t SIM7000_Modem::config_ip()
 
 /* Métodos individuales */
 
-esp_err_t SIM7000_Modem::read_grps_apn(std::string &apn)
+esp_err_t SIM7000_Modem::read_tcptk_apn(std::string &apn)
 {
     std::lock_guard lock(m_mutex);
     esp_err_t err;
     std::string &response = m_result_info->response;
 
-    ESP_LOGI(TAG, "Reading APN...");
-    
-    // obtiene el APN actual
+    ESP_LOGI(TAG, "Reading TCP APN...");
     err = execute_internal_cmd(at_cmd_t::CSTT, "?");
     if (err == ESP_OK) {
         helpers::remove_before(response, ": ");
         helpers::extract_token(response, 0, ",", apn, true);
         helpers::trim(apn);
+    } 
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Read TCP APN succeed");
     } else {
-        ESP_LOGE(TAG, "Failed to read GPRS APN");
+        ESP_LOGE(TAG, "Failed to read TCP APN");
     }
 
     return err;
 }
 
-esp_err_t SIM7000_Modem::start_gprs()
+esp_err_t SIM7000_Modem::set_tcptk_apn()
 {
     std::lock_guard lock(m_mutex);
     esp_err_t err;
-    std::string payload = "=\"";
-    payload.append(m_apn.apn);
-    payload.append("=\"");
+    std::string params = "=\"";
+    params.append(m_apn.apn);
+    params.append("\"");
     
-    ESP_LOGI(TAG, "Starting GPRS...");
-    err = execute_internal_cmd_no_answer(at_cmd_t::CSTT, payload);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start GPRS");
+    ESP_LOGI(TAG, "Setting TCP APN...");
+    err = execute_internal_cmd_no_answer(at_cmd_t::CSTT, params);
+    
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Set TCP APN succeed");
+    } else {
+        ESP_LOGE(TAG, "Failed to set TCP APN");
     }
 
     return err;
 }
 
-esp_err_t SIM7000_Modem::activate_gprs()
+esp_err_t SIM7000_Modem::bring_up_tcptk_conn()
 {
     std::lock_guard lock(m_mutex);
-    esp_err_t result;
+    esp_err_t err;
 
-    ESP_LOGI(TAG, "Activating GPRS...");
-    result = execute_internal_cmd_no_answer(at_cmd_t::CIICR);
-    if (result != ESP_OK) {
+    ESP_LOGI(TAG, "Bringing up Wireless Connection...");
+    err = execute_internal_cmd_no_answer(at_cmd_t::CIICR);
+    
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Bring up Wireless Connection with GPRS succeed");
+    } else {
         ESP_LOGE(TAG, "Failed to activate GPRS");
     }
 
-    return result;
+    return err;
 }
 
-esp_err_t SIM7000_Modem::deactivate_gprs()
+esp_err_t SIM7000_Modem::deact_tcptk_pdp_context()
 {
     std::lock_guard lock(m_mutex);
     esp_err_t result;
 
-    ESP_LOGI(TAG, "Deactivating GPRS...");
+    ESP_LOGI(TAG, "Deactivating TCP PDP Context...");
     result = execute_internal_cmd_no_answer(at_cmd_t::CIPSHUT);
-    if (result != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to deactivate GPRS");
+    
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "Deactivate TCP PDP Context succeed");
+    } else {
+        ESP_LOGE(TAG, "Failed to deactivate TCP PDP Context");
     }
 
     return result;
@@ -824,27 +840,27 @@ esp_err_t SIM7000_Modem::query_bearer(bearer_status_t &status, std::string *ip)
     return err;
 }
 
-esp_err_t SIM7000_Modem::set_bearer_param(const char *param, const char *value)
+esp_err_t SIM7000_Modem::set_bearer_param(const char *param_name, const char *param_value)
 {
-    if (!param || !value) return ESP_ERR_INVALID_ARG;
+    if (!param_name || !param_value) return ESP_ERR_INVALID_ARG;
 
-    esp_err_t result;
+    esp_err_t err;
     std::lock_guard lock(m_mutex);
-    std::string payload = "=3," + std::to_string(m_apn.cid);
-    payload.append(",\"");
-    payload.append(param);
-    payload.append("\",\"");
-    payload.append(value);
-    payload.append("\"");
+    std::string cmd_params = "=3," + std::to_string(m_apn.cid);
+    cmd_params.append(",\"");
+    cmd_params.append(param_name);
+    cmd_params.append("\",\"");
+    cmd_params.append(param_value);
+    cmd_params.append("\"");
 
     ESP_LOGI(TAG, "Setting bearer parameter...");
 
-    result = execute_internal_cmd_no_answer(at_cmd_t::SAPBR, payload);
-    if (result != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set bearer parameter '%s'", param);
+    err = execute_internal_cmd_no_answer(at_cmd_t::SAPBR, cmd_params);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set bearer parameter '%s'", param_name);
     }
 
-    return result;
+    return err;
 }
 
 esp_err_t SIM7000_Modem::get_net_active_status(network_active_status_t &status, std::string *ip)
@@ -883,42 +899,47 @@ esp_err_t SIM7000_Modem::get_net_active_status(network_active_status_t &status, 
     return err;
 }
 
-esp_err_t SIM7000_Modem::set_net_active_status(network_active_mode_t mode, bool wait_to_confirm)
+esp_err_t SIM7000_Modem::set_net_active_mode(network_active_mode_t mode, TickType_t tick_count)
 {
     std::lock_guard lock(m_mutex);
-    std::string param;
-    esp_err_t result;
+    std::string cmd_params;
+    esp_err_t err;
+    uint32_t flag = 0;
 
-    ESP_LOGI(TAG, "Setting network status...");
+    ESP_LOGI(TAG, "Setting network active mode...");
 
     switch (mode)
     {
         case network_active_mode_t::ACTIVE:
-            param = "0";
+            cmd_params = "=1";
+            flag = APP_PDP_ACTIVE_BIT;
             break;
         case network_active_mode_t::DEACTIVE:
-            param = "1";
+            cmd_params = "=0";
+            flag = APP_PDP_DEACTIVE_BIT;
             break;
         case network_active_mode_t::AUTO_ACTIVE:
-            param = "2";
+            cmd_params = "=2";
             break;
         default:
             ESP_LOGE(TAG, "Invalid network active mode");
             return ESP_ERR_INVALID_ARG;
     }
 
-    result = execute_internal_cmd_no_answer(at_cmd_t::CNACT);
+    err = execute_internal_cmd_no_answer(at_cmd_t::CNACT, cmd_params);
 
-    if (result == ESP_OK && wait_to_confirm) {
+    if (err == ESP_OK && flag != 0) {
         // esperar confirmación de activación
-        m_event_group.wait_for_flags(NET_ACTIVE_STATUS_CHANGED_BIT);
+        if (m_event_group.wait_for_flags(flag, false, true, tick_count) == 0) {
+            ESP_LOGW(TAG, "Network active mode confirmation timed out");
+        }
     }
 
-    if (result != ESP_OK) {
+    if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set network active mode");
     }
 
-    return result;
+    return err;
 }
 
 /* Funciones privadas */
@@ -1028,8 +1049,52 @@ void SIM7000_Modem::receive_uart_data(size_t length)
 void SIM7000_Modem::on_urc_message(std::string &payload)
 {
     ESP_LOGI(TAG, "URC message received (%u bytes)", payload.length());
-    ESP_LOG_BUFFER_CHAR(TAG, payload.c_str(), payload.length());
-    ESP_LOG_BUFFER_HEX(TAG, payload.c_str(), payload.length());
+
+    helpers::trim(payload, "\r\n ");
+    auto def = get_urc_def(payload);
+    if (def == nullptr) {
+        return;
+    }
+    
+    ESP_LOGI(TAG, "URC: %s", payload.c_str());
+
+    switch (def->urc)
+    {
+        case urc_t::DST:
+            ESP_LOGI(TAG, "Refresh time zone by network");
+            break;
+        case urc_t::PSUTTZ:
+            ESP_LOGI(TAG, "Refresh date and time by network");
+            break;
+        case urc_t::PDP_DEACT:
+            ESP_LOGI(TAG, "GRPS is disconnected by network");
+            m_event_group.set_flags(PDP_DEACT_BIT);
+            break;
+        case urc_t::APP_PDP_ACTIVE:
+            ESP_LOGI(TAG, "TCP APP Tookit is now active");
+            m_event_group.set_flags(APP_PDP_ACTIVE_BIT);
+            m_event_group.clear_flags(APP_PDP_DEACTIVE_BIT);
+            break;
+        case urc_t::APP_PDP_DEACTIVE:
+            ESP_LOGI(TAG, "TCP APP Tookit is now active");
+            m_event_group.set_flags(APP_PDP_DEACTIVE_BIT);
+            m_event_group.clear_flags(APP_PDP_ACTIVE_BIT);
+            break;
+        case urc_t::CFUN:
+            ESP_LOGI(TAG, "Phone functionalitity has change");
+            break;
+        case urc_t::CPIN:
+            ESP_LOGI(TAG, "SIM Card status has changed");
+            break;
+        case urc_t::SMSUB:
+            ESP_LOGI(TAG, "MQTT message received");
+            break;
+        case urc_t::UGNSINF:
+            ESP_LOGI(TAG, "GNSS Navigation Report");
+            break;
+        default:
+            break;
+    }
 }
 
 int SIM7000_Modem::on_cmd_write(const char *data, size_t length)

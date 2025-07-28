@@ -83,21 +83,21 @@ namespace axomotor::lte_modem
         /* Métodos generales de inicialización */
 
         esp_err_t config_gprs();
-        esp_err_t config_tcp();
-        esp_err_t config_ip();
+        esp_err_t config_tcp_tk();
+        esp_err_t config_ip_app();
 
         /* Métodos individuales */
 
-        esp_err_t read_grps_apn(std::string &apn);
-        esp_err_t start_gprs();
-        esp_err_t activate_gprs();
-        esp_err_t deactivate_gprs();
+        esp_err_t read_tcptk_apn(std::string &apn);
+        esp_err_t set_tcptk_apn();
+        esp_err_t bring_up_tcptk_conn();
+        esp_err_t deact_tcptk_pdp_context();
         esp_err_t close_bearer();
         esp_err_t open_bearer();
         esp_err_t query_bearer(bearer_status_t &status, std::string *ip = nullptr);
         esp_err_t set_bearer_param(const char *param, const char *value);
         esp_err_t get_net_active_status(network_active_status_t &status, std::string *ip = nullptr);
-        esp_err_t set_net_active_status(network_active_mode_t mode, bool wait_to_confirm = true);
+        esp_err_t set_net_active_mode(network_active_mode_t mode, TickType_t tick_count = pdMS_TO_TICKS(1000));
 
     private:
         /* Constantes */
