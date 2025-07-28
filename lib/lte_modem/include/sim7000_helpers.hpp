@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <cstddef>
@@ -202,81 +201,6 @@ namespace axomotor::lte_modem::helpers
     {
         return to_number<T>(buffer.data(), buffer.size(), len);
     }
-
-    /**
-     * @brief Función plantilla que divide una cadena en subcadenas utilizando un carácter
-     * como delimitador.
-     *
-     * @tparam array_size Tamaño del arreglo de salida
-     * @param str Cadena original
-     * @param array Arreglo de cadenas para almacenar los resultados
-     * @param c Carácter delimitador, por defecto ','
-     * @param pos Posición inicial, por defecto 0
-     * @return size_t
-     */
-    template <size_t array_size>
-    size_t split(const std::string &str, std::array<std::string, array_size> &array, const char c = ',', size_t pos = 0)
-    {
-        // valida los parámetros; retorna  0 si no son válidos
-        if (str.length() == 0 || array.size() == 0 || pos >= str.length())
-            return 0;
-        size_t count = 0; // siempre habrá un elemento
-        size_t item_length = 0;
-
-        // bucle que recorre el buffer en búsqueda del carácter delimitador
-        for (; pos < str.length(); pos++)
-        {
-            // verifica si el carácter actual coincide con el buscado
-            if (str.at(pos) == c)
-            {
-                // verifica si la longitud del item es mayor que cero
-                if (item_length > 0)
-                {
-                    // crea una subcadena especificando la posición y longitud
-                    array[count] = str.substr(pos - item_length, item_length);
-                }
-
-                // incrementa el contador de items y reestablece la longitud
-                count++;
-                item_length = 0;
-
-                // verifica si se ha llegado al límite del arreglo
-                if (count == array_size)
-                {
-                    // termina el bucle
-                    break;
-                }
-            }
-            else
-            {
-                // incrementa la longitud del item
-                item_length++;
-            }
-        }
-
-        if (count < array_size)
-        {
-            // verifica si hay más de un item en el arreglo
-            if (count > 1)
-                pos--;
-            // verifica si la longitud del item es mayor que cero
-            if (item_length > 0)
-            {
-                // crea una subcadena especificando la posición y longitud
-                array[count] = str.substr(pos - item_length, item_length);
-            }
-
-            count++;
-        }
-
-        return count;
-    }
-
-    bool extract_content(
-        const std::string &string,
-        const char *first_delimiter,
-        const char *last_delimiter,
-        std::string &content);
 
     /**
      * @brief Extrae el token N de una cadena delimitada por uno o más caracteres.

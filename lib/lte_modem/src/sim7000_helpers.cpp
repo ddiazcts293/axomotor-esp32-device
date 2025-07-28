@@ -3,36 +3,6 @@
 
 namespace axomotor::lte_modem::helpers
 {
-    bool extract_content(
-        const std::string &string,
-        const char *first_delimiter,
-        const char *last_delimiter,
-        std::string &content)
-    {
-        size_t first_delim_len, last_delim_len, index, length;
-
-        // verifica si se recibieron los delimitadores
-        if (!first_delimiter || !last_delimiter) return false;
-        first_delim_len = strlen(first_delimiter);
-        last_delim_len = strlen(last_delimiter);
-        if (first_delim_len == 0 || last_delim_len == 0) return false;
-
-        // busca la primera ocurrencia del primer delimitador
-        index = string.find_first_of(first_delimiter);
-        if (index == -1) return false;
-
-        // suma al indice la longitud del primer delimitador
-        index += first_delim_len;
-        // busca la primera ocurrencia del segundo delimitador
-        length = string.find_first_of(last_delimiter, index);
-        if (length == -1) return false;
-
-        content.clear();
-        content.append(string, index, length - index);
-
-        return true;
-    }
-
     bool extract_token(std::string &str, size_t token_idx, const char *delimiters, bool keep_empty_tokens)
     {
         return extract_token(str, token_idx, delimiters, str, keep_empty_tokens);
