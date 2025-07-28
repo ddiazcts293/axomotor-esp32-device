@@ -503,13 +503,58 @@ enum class cms_error_code_t
     DOING_SIM_REFRESH = 532
 };
 
-enum class parse_state_t
+enum class urc_t
 {
-    WAITING_HEADER,
-    IN_BODY,
-    WAITING_TERMINATOR,
-    COMPLETED,
-    ERROR
+    CRING,
+    CREG,
+    CMTI,
+    CMT,
+    CBM,
+    CDS,
+    PSNWID,
+    PSUTTZ,
+    CTZV,
+    DST,
+    CPIN,
+    CUSD,
+    NORMAL_POWER_DOWN,
+    UNDER_VOLTAGE_POWER_DOWN,
+    UNDER_VOLTAGE_WARNNING,
+    OVER_VOLTAGE_POWER_DOWN,
+    OVER_VOLTAGE_WARNNING,
+    RDY,
+    CFUN,
+    CONNECT_OK,
+    CONNECT,
+    CONNECT_FAIL,
+    ALREADY_CONNECT,
+    SEND_OK,
+    CLOSED,
+    RECV_FROM,
+    IPD,
+    RECEIVE,
+    REMOTE,
+    CFNSGIP,
+    PDP_DEACT,
+    APP_PDP_ACTIVE,
+    APP_PDP_DEACTIVE,
+    UGNSINF,
+    SMSUB
+};
+
+enum class urc_match_t 
+{
+    AT_BEGINNING,
+    AT_END,
+    WHOLE_TEXT
+};
+
+struct urc_def_t
+{
+    urc_t urc;
+    const char *identifier;
+    urc_match_t match;
+    at_cmd_t command;
 };
 
 struct at_cmd_def_t
@@ -518,12 +563,6 @@ struct at_cmd_def_t
     at_cmd_type_t type;
     const char *string;
     int max_response_time; // 0 = indefined
-};
-
-struct result_code_def_t 
-{
-    at_cmd_result_t code;
-    const char *string;
 };
 
 struct sim7000_cmd_result_info_t
@@ -575,7 +614,9 @@ struct sim7000_status_t
 
 const at_cmd_def_t *get_command_def(at_cmd_t command);
 
-const result_code_def_t *get_result_code_def(at_cmd_result_t code);
+const urc_def_t *get_urc_def(const std::string &urc);
+
+bool check_if_is_urc(const std::string &urc);
 
 } // namespace internal
 

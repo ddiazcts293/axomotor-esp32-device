@@ -226,19 +226,52 @@ static const at_cmd_def_t AT_COMMANDS_TABLE[] =
     { at_cmd_t::CGNSSUPL, at_cmd_type_t::EXTENDED, "CGNSSUPL", 0 }
 };
 
-static const result_code_def_t RESULT_CODE_TABLE[] = 
+static const urc_def_t URC_TABLE[] = 
 {
-    { at_cmd_result_t::OK, "OK" },
-    { at_cmd_result_t::ERROR, "ERROR" },
-    { at_cmd_result_t::CME_ERROR, "+CME ERROR:" },
-    { at_cmd_result_t::CMS_ERROR, "+CMS ERROR:" }
+    { urc_t::CRING, "+CRING", urc_match_t::AT_BEGINNING, at_cmd_t::CRC },
+    { urc_t::CREG, "+CREG", urc_match_t::AT_BEGINNING, at_cmd_t::CREG },
+    { urc_t::CMTI, "+CMTI", urc_match_t::AT_BEGINNING, at_cmd_t::CNMI },
+    { urc_t::CMT, "+CMT", urc_match_t::AT_BEGINNING, at_cmd_t::CNMI },
+    { urc_t::CBM, "+CBM", urc_match_t::AT_BEGINNING, at_cmd_t::CNMI },
+    { urc_t::CDS, "+CDS", urc_match_t::AT_BEGINNING, at_cmd_t::CNMI },
+    { urc_t::PSNWID, "*PSNWID", urc_match_t::AT_BEGINNING, at_cmd_t::CLTS },
+    { urc_t::PSUTTZ, "*PSUTTZ", urc_match_t::AT_BEGINNING, at_cmd_t::CLTS },
+    { urc_t::CTZV, "+CTZV", urc_match_t::AT_BEGINNING, at_cmd_t::CLTS },
+    { urc_t::DST, "DST", urc_match_t::AT_BEGINNING, at_cmd_t::CLTS },
+    { urc_t::CPIN, "+CPIN", urc_match_t::AT_BEGINNING, at_cmd_t::CPIN },
+    { urc_t::CUSD, "+CUSD", urc_match_t::AT_BEGINNING, at_cmd_t::CUSD },
+    { urc_t::NORMAL_POWER_DOWN, "NORMAL POWER DOWN", urc_match_t::WHOLE_TEXT, at_cmd_t::NONE },
+    { urc_t::UNDER_VOLTAGE_POWER_DOWN, "UNDER-VOLTAGE POWER DOWN", urc_match_t::WHOLE_TEXT, at_cmd_t::NONE },
+    { urc_t::UNDER_VOLTAGE_WARNNING, "UNDER-VOLTAGE WARNNING", urc_match_t::WHOLE_TEXT, at_cmd_t::NONE },
+    { urc_t::OVER_VOLTAGE_POWER_DOWN, "OVER-VOLTAGE POWER DOWN", urc_match_t::WHOLE_TEXT, at_cmd_t::NONE },
+    { urc_t::OVER_VOLTAGE_WARNNING, "OVER-VOLTAGE WARNNING", urc_match_t::WHOLE_TEXT, at_cmd_t::NONE },
+    { urc_t::RDY, "RDY", urc_match_t::WHOLE_TEXT, at_cmd_t::IPR },
+    { urc_t::CFUN, "+CFUN", urc_match_t::AT_BEGINNING, at_cmd_t::CFUN },
+    { urc_t::CONNECT_OK, "CONNECT OK", urc_match_t::AT_END, at_cmd_t::CIPSTART },
+    { urc_t::CONNECT, "CONNECT", urc_match_t::WHOLE_TEXT, at_cmd_t::NONE },
+    { urc_t::CONNECT_FAIL, "CONNECT FAIL", urc_match_t::AT_END, at_cmd_t::CIPSTART },
+    { urc_t::ALREADY_CONNECT, "ALREADY CONNECT", urc_match_t::AT_END, at_cmd_t::CIPSTART },
+    { urc_t::SEND_OK, "SEND OK", urc_match_t::AT_END, at_cmd_t::NONE },
+    { urc_t::CLOSED, "CLOSED", urc_match_t::AT_END, at_cmd_t::NONE },
+    { urc_t::RECV_FROM, "RECV FROM", urc_match_t::AT_BEGINNING, at_cmd_t::CIPSRIP },
+    { urc_t::IPD, "+IPD", urc_match_t::AT_BEGINNING, at_cmd_t::CIPHEAD },
+    { urc_t::RECEIVE, "+RECEIVE", urc_match_t::AT_BEGINNING, at_cmd_t::NONE },
+    { urc_t::REMOTE, "REMOTE IP", urc_match_t::AT_BEGINNING, at_cmd_t::NONE },
+    { urc_t::CFNSGIP, "+CFNSGIP", urc_match_t::AT_BEGINNING, at_cmd_t::CDNSGIP },
+    { urc_t::PDP_DEACT, "+PDP: DEACT", urc_match_t::WHOLE_TEXT, at_cmd_t::NONE },
+    { urc_t::APP_PDP_ACTIVE, "+APP PDP: ACTIVE", urc_match_t::WHOLE_TEXT, at_cmd_t::CNACT },
+    { urc_t::APP_PDP_DEACTIVE, "+APP PDP: DEACTIVE", urc_match_t::WHOLE_TEXT, at_cmd_t::CNACT },
+    { urc_t::UGNSINF, "+UGNSINF", urc_match_t::AT_BEGINNING, at_cmd_t::CGNSURC },
+    { urc_t::SMSUB, "+SMSUB", urc_match_t::AT_BEGINNING, at_cmd_t::SMSUB }
 };
+
+static const int AT_COMMANDS_TABLE_SIZE = sizeof(AT_COMMANDS_TABLE) / sizeof(at_cmd_def_t);
+static const int URC_TABLE_SIZE = sizeof(URC_TABLE) / sizeof(urc_def_t);
+
 
 const at_cmd_def_t *get_command_def(at_cmd_t command)
 {
-    const int table_size = sizeof(AT_COMMANDS_TABLE) / sizeof(at_cmd_def_t);
-    
-    for (size_t i = 0; i < table_size; i++) {
+    for (size_t i = 0; i < AT_COMMANDS_TABLE_SIZE; i++) {
         if (AT_COMMANDS_TABLE[i].command == command) {
             return &AT_COMMANDS_TABLE[i];
         }
@@ -247,17 +280,37 @@ const at_cmd_def_t *get_command_def(at_cmd_t command)
     return nullptr;
 }
 
-const result_code_def_t *get_result_code_def(at_cmd_result_t code)
+const urc_def_t *get_urc_def(const std::string &urc)
 {
-    const int table_size = sizeof(RESULT_CODE_TABLE) / sizeof(result_code_def_t);
-    
-    for (size_t i = 0; i < table_size; i++) {
-        if (RESULT_CODE_TABLE[i].code == code) {
-            return &RESULT_CODE_TABLE[i];
+    bool match = false;
+
+    for (size_t i = 0; i < URC_TABLE_SIZE; i++) {
+        const urc_def_t *def = &URC_TABLE[i];
+        
+        switch (def->match)
+        {
+            case urc_match_t::WHOLE_TEXT:
+                match = urc == def->identifier;
+                break;
+            case urc_match_t::AT_BEGINNING:
+                match = urc.starts_with(def->identifier);
+                break;
+            case urc_match_t::AT_END:
+                match = urc.ends_with(def->identifier);
+                break;
+            default:
+                break;
         }
+
+        if (match) return def;
     }
     
     return nullptr;
+}
+
+bool check_if_is_urc(const std::string &urc)
+{
+    return get_urc_def(urc) != nullptr;
 }
 
 } // namespace axomotor::lte_modem
