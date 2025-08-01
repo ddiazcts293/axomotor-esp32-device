@@ -1,4 +1,4 @@
-#include "services/camera_service.hpp"
+#include "services/image_service.hpp"
 #include "constants/hw.hpp"
 
 #include <esp_log.h>
@@ -8,7 +8,7 @@ namespace axomotor::services {
 
 using namespace axomotor::constants::hw::camera;
 
-constexpr static const char *TAG = "camera_service";
+constexpr static const char *TAG = "image_service";
 
 CameraService::CameraService() : 
     ServiceBase{TAG, 8 * 1024, 10}
