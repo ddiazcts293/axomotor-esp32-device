@@ -30,13 +30,19 @@ namespace axomotor::lte_modem
             bool is_partial = false,
             bool is_raw = false);
     
+        esp_err_t execute_cmd(
+            internal::sim7000_cmd_context_t &context,
+            TickType_t ticks_to_wait = 0
+        );
+
     protected:
         void feed_buffer(const char *buffer, size_t length);
         virtual void on_urc_message(std::string &) = 0;
         virtual int on_cmd_write(const char *, size_t) = 0;
+        bool m_is_running;
+
     private:
-        internal::sim7000_cmd_context_t m_cmd_context;
-        std::weak_ptr<internal::sim7000_cmd_result_info_t> m_result_info;
+        internal::sim7000_cmd_context_t *m_cmd_context;
         std::string m_parser_buffer;
         threading::EventGroup m_parser_event_group;
 

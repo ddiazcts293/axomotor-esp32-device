@@ -11,6 +11,7 @@ namespace axomotor::lte_modem {
 #define MODEM_AVAILABLE_BIT     BIT0
 #define RESPONSE_STARTED_BIT    BIT1
 #define RESPONSE_COMPLETED_BIT  BIT2
+#define WAITING_CMD_PAYLOAD_BIT BIT3
 
 #define NULL_CH     '\0'
 #define CRLF        "\r\n"
@@ -25,7 +26,8 @@ static const char *TAG = "sim7000:basic_modem";
 /* SIM7000 Basic Modem */
 
 SIM7000_BasicModem::SIM7000_BasicModem(size_t buffer_size) :
-    m_cmd_context{},
+    m_is_running{false},
+    m_cmd_context{nullptr},
     m_parser_event_group{}
 {
     m_parser_buffer.reserve(buffer_size);
@@ -41,15 +43,14 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     bool is_raw
 )
 {
-    return execute_cmd(
-        command,
-        std::span<const char>(),
-        result_info,
-        ticks_to_wait,
-        ignore_response,
-        is_partial,
-        is_raw
-    );
+    sim7000_cmd_context_t context;
+    context.command = command;
+    context.result_info = result_info;
+    context.ignore_response = ignore_response;
+    context.is_raw = is_raw;
+    context.is_partial = is_partial;
+    
+    return execute_cmd(context, ticks_to_wait);
 }
 
 esp_err_t SIM7000_BasicModem::execute_cmd(
@@ -62,13 +63,33 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     bool is_raw
 )
 {
+    sim7000_cmd_context_t context;
+    context.command = command;
+    context.params = params;
+    context.result_info = result_info;
+    context.ignore_response = ignore_response;
+    context.is_raw = is_raw;
+    context.is_partial = is_partial;
+    
+    return execute_cmd(context, ticks_to_wait);
+}
+
+esp_err_t SIM7000_BasicModem::execute_cmd(
+    internal::sim7000_cmd_context_t &context,
+    TickType_t ticks_to_wait
+)
+{
+    // verifica si el receptor está en ejecución
+    if (!m_is_running) return ESP_ERR_NOT_ALLOWED;
+
     // verifica si se recibió un puntero en donde guardar el resultado del
     // comando
-    if (!result_info) return ESP_ERR_INVALID_ARG;
+    if (!context.result_info) return ESP_ERR_INVALID_ARG;
+    auto result_info = context.result_info;
     result_info->reset();
     
     // obtiene la definición del comando recibido
-    const at_cmd_def_t *cmd_def = get_command_def(command);
+    const at_cmd_def_t *cmd_def = get_command_def(context.command);
     if (cmd_def == nullptr) return ESP_ERR_INVALID_ARG;
     
     // espera hasta que el modem esté disponible
@@ -78,25 +99,17 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     const char *cmd_string = cmd_def->string;
     esp_err_t err;
     bool ack;
+    bool is_query_cmd = !context.params.empty() && context.params.front() == '?';
 
     // establece el contexto del comando
-    m_cmd_context.command = command;
-    m_cmd_context.is_partial = is_partial;
-    m_cmd_context.is_raw = is_raw;
-    m_cmd_context.ignore_response = ignore_response;
-    m_result_info = result_info;
-
-    // comienza con la escritura de los comando en el puerto UART
-    //wlen = on_cmd_write("AT", 2);
+    m_cmd_context = &context;
 
     switch (cmd_def->type) {
         case at_cmd_type_t::BASIC:
             cmd_line.append(cmd_string);
             break;
         case at_cmd_type_t::S_PARAM:
-            //wlen += on_cmd_write(cmd_string, strlen(cmd_string));
             cmd_line.append(cmd_line);
-            //wlen += on_cmd_write("=", 1);
             cmd_line.append("=");
             break;
         case at_cmd_type_t::EXTENDED:
@@ -108,8 +121,8 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     }
 
     // verifica si hay datos adicionales a enviar
-    if (!params.empty()) {
-        cmd_line.append(params.data(), params.size());
+    if (!context.params.empty()) {
+        cmd_line.append(context.params.data(), context.params.size());
     }
 
     // escribe un caracter de retorno de carro para indicar ejecutar el comando
@@ -117,8 +130,12 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     cmd_line.append(CR);
     on_cmd_write(cmd_line.data(), cmd_line.length());
 
-    // verifica si el tiempo de espera no es indefinido
-    if (ticks_to_wait != portMAX_DELAY)
+    // verifica si el comando es de consulta (no hay espera)
+    if (is_query_cmd) {
+        ticks_to_wait = 150;
+    }
+    // de lo contrario, verifica si no se establecio un tiempo de espera
+    else if (ticks_to_wait == 0)
     {
         // verifica si el comando define un tiempo máximo de respuesta
         if (cmd_def->max_response_time != 0) {
@@ -139,6 +156,28 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
         true, // solo espera un bit
         ticks_to_wait // tiempo de espera
     );
+
+    // verifica si el comando requiere enviar una carga útil de datos
+    if (ack && context.send_payload) {
+        // espera hasta recibir el bit de confirmación
+        m_parser_event_group.wait_for_flags(
+            WAITING_CMD_PAYLOAD_BIT,
+            true,
+            true,
+            portMAX_DELAY
+        );
+
+        ESP_LOGI(
+            TAG, 
+            "Writing command payload (%u bytes)",
+            context.payload.size()
+        );
+
+        // escribe la carga útil
+        on_cmd_write(context.payload.data(), context.payload.size());
+        // envia un enter
+        on_cmd_write(CR, 1);
+    }
 
     // verifica si se recibio la confirmación de respuesta recibida
     if (ack) {
@@ -162,11 +201,11 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
                         result_info->response.length()
                     );
 
-                    ESP_LOG_BUFFER_HEX(
+                    /* ESP_LOG_BUFFER_HEX(
                         TAG, 
                         result_info->response.c_str(),
                         result_info->response.length()
-                    );
+                    ); */
                 } else {
                     ESP_LOGI(TAG, "Command execution successful");
                 }
@@ -207,8 +246,8 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     }
 
     // restablece el contexto del comando
-    m_cmd_context.reset();
-    m_result_info.reset();
+    //context.reset();
+    m_cmd_context = nullptr;
     // hace que el modem esté disponible de nuevo
     m_parser_event_group.set_flags(MODEM_AVAILABLE_BIT);
 
@@ -224,18 +263,28 @@ void SIM7000_BasicModem::feed_buffer(const char *buffer, size_t length)
 
 void SIM7000_BasicModem::try_parse()
 {
+    bool is_completed = false;
+    size_t position;
+    
     // verifica si actualmente se está ejecutando un comando
-    if (!m_result_info.expired()) {
+    if (m_cmd_context != nullptr) {
         // verifica si no se ha marcado el comienzo de la respuesta
-        if (!m_cmd_context.response_received) {
+        if (!m_cmd_context->response_received) {
             // notifica al receptor que se ha comenzado a recibir una respuesta
             m_parser_event_group.set_flags(RESPONSE_STARTED_BIT);
-            m_cmd_context.response_received = true;
+            m_cmd_context->response_received = true;
+        }
+
+        // verifica si se está ejecutando un comando que requiere enviar datos
+        if (m_cmd_context->send_payload && 
+            (position = m_parser_buffer.find(CRLF "> ")) != std::string::npos) {
+            m_parser_buffer.erase(position, 4);
+            m_parser_event_group.set_flags(WAITING_CMD_PAYLOAD_BIT);
         }
 
         // verifica si se debe recibir una respuesta en crudo
-        if (m_cmd_context.is_raw) {
-            auto cmd_result = m_result_info.lock();
+        if (m_cmd_context->is_raw) {
+            auto cmd_result = m_cmd_context->result_info;
             // agrega el contenido obtenido
             cmd_result->response.append(m_parser_buffer);
             
@@ -256,9 +305,6 @@ void SIM7000_BasicModem::try_parse()
         }
     }
 
-    bool is_completed = false;
-    size_t position;
-    
     // busca el siguiente salto de línea
     while ((position = m_parser_buffer.find(CRLF)) != std::string::npos) {
         // copia la linea y la borra del buffer
@@ -273,8 +319,8 @@ void SIM7000_BasicModem::try_parse()
             on_urc_message(line);
         }
         // de lo contrario,verifica si actualmente se está ejecutando un comando
-        else if (!m_result_info.expired()) { 
-            auto cmd_result = m_result_info.lock();
+        else if (m_cmd_context != nullptr) { 
+            auto cmd_result = m_cmd_context->result_info;
             std::string &response = cmd_result->response;
 
             // verifica el contenido de la línea
