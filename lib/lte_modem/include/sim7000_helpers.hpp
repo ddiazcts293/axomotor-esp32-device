@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <ctime>
 #include <string>
 #include <array>
 #include <type_traits>
@@ -266,4 +267,9 @@ namespace axomotor::lte_modem::helpers
      */
     void remove_after(std::string &str, const char *seq, bool keep_seq = false);
 
+    /// @brief Convierte una marca de tiempo de GPS a Unix Epoch.
+    /// @param gps_timestamp Marca de tiempo GPS.
+    /// @return Marca de tiempo Epoch Unix.
+    time_t gps_ts_to_epoch_ts(uint64_t gps_timestamp);
+    
 } // namespace axomotor::lte_modem

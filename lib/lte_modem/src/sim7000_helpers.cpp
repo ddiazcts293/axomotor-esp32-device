@@ -79,4 +79,30 @@ namespace axomotor::lte_modem::helpers
         }
     }
 
+    time_t gps_ts_to_epoch_ts(uint64_t gps_timestamp)
+    {
+        if (gps_timestamp == 0) return 0;
+        time_t epoch;
+        struct tm c_dt;
+
+        // formato: 20250801000426 => 2025_08_01_000426
+        //             10000000000
+
+        c_dt.tm_year = (gps_timestamp / 10000000000) - 1900; // 2025
+        gps_timestamp %= 10000000000;       // 801000426
+        c_dt.tm_mon = (gps_timestamp / 100000000) - 1;  // 08
+        gps_timestamp %= 100000000;         // 1000426
+        c_dt.tm_mday = gps_timestamp / 1000000;      // 01
+        gps_timestamp %= 1000000;           // 000426
+        c_dt.tm_hour = gps_timestamp / 10000;       // 00
+        gps_timestamp %= 10000;             // 0426
+        c_dt.tm_min = gps_timestamp / 100;       // 04
+        gps_timestamp %= 100;               // 26
+        c_dt.tm_sec = (int)gps_timestamp;
+        c_dt.tm_isdst = 0;
+
+        epoch = mktime(&c_dt);
+        return epoch;
+    }
+
 } // namespace axomotor::lte_modem
