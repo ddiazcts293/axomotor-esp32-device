@@ -780,4 +780,10 @@ struct mqtt_config_t
     uint8_t qos;
 };
 
+struct mqtt_message_t
+{
+    char topic[128];
+    char content[512];
+};
+
 } // namespace axomotor::lte_mode

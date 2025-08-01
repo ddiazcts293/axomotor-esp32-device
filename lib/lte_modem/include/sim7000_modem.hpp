@@ -8,6 +8,7 @@
 #include <freertos/FreeRTOS.h>
 
 #include <esp_err.h>
+#include <esp_event.h>
 #include <hal/uart_types.h>
 #include <hal/gpio_types.h>
 #include <service_base.hpp>
@@ -15,6 +16,24 @@
 
 namespace axomotor::lte_modem
 {
+    ESP_EVENT_DECLARE_BASE(MODEM_EVENTS);
+
+    enum {
+        MODEM_EVENT_STARTED,
+        MODEM_EVENT_STOPPED,
+        MODEM_EVENT_DST_UPDATED,
+        MODEM_EVENT_DATE_TIME_UPDATED,
+        MODEM_EVENT_PDP_DEACTIVE,
+        MODEM_EVENT_APP_PDP_ACTIVE,
+        MODEM_EVENT_APP_PDP_DEACTIVE,
+        MODEM_EVENT_FUNC_CHANGED,
+        MODEM_EVENT_SIM_CARD_STATUS_CHANGED,
+        MODEM_EVENT_SIM_CARD_NOT_READY,
+        MODEM_EVENT_SIM_CARD_NOT_INSERTED,
+        MODEM_EVENT_MQTT_MESSAGE_RECEIVED,
+        MODEM_EVENT_GNSS_NAVIGATION_REPORT,
+    };
+
     /* Constantes */
 
     static const int DEFAULT_BAUD_RATE = 115200;
@@ -59,6 +78,8 @@ namespace axomotor::lte_modem
         /* General */
 
         esp_err_t init();
+        esp_err_t enable_events(esp_event_loop_handle_t *event_loop = nullptr);
+        esp_err_t disable_events();
         esp_err_t set_apn(const apn_config_t &config);
         esp_err_t get_apn(apn_config_t &config);
         esp_err_t get_sim_status(sim_status_t &status);
@@ -114,6 +135,8 @@ namespace axomotor::lte_modem
         std::recursive_mutex m_mutex;
         QueueHandle_t m_uart_event_queue;
         threading::EventGroup m_event_group;
+        esp_event_loop_handle_t *m_event_loop;
+        bool m_enable_events;
 
         esp_err_t setup() override;
         void loop() override;
@@ -123,6 +146,18 @@ namespace axomotor::lte_modem
         void receive_uart_data(size_t length);
         void on_urc_message(std::string &payload) override;
         int on_cmd_write(const char *data, size_t length) override;
+        
+        void post_event(int32_t id, TickType_t ticks_to_wait = portMAX_DELAY);
+        
+        void post_event(
+            int32_t id,
+            void *data, 
+            size_t size, 
+            TickType_t ticks_to_wait = portMAX_DELAY);
+
+        void post_cpin_event(std::string &payload);
+        void post_gnss_event(std::string &payload);
+        void post_mqtt_event(std::string &payload);
 
         esp_err_t execute_internal_cmd_no_answer(
             internal::at_cmd_t command,

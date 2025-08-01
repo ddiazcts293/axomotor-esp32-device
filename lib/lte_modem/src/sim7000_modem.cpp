@@ -21,6 +21,8 @@
 
 namespace axomotor::lte_modem {
 
+ESP_EVENT_DEFINE_BASE(MODEM_EVENTS);
+
 using namespace axomotor::lte_modem::internal;
 using Parser = SIM7000_BasicModem;
 
@@ -44,7 +46,9 @@ SIM7000_Modem::SIM7000_Modem(
     m_pin_pwr{(gpio_num_t)pin_pwr},
     m_apn{},
     m_status{},
-    m_uart_event_queue{nullptr}
+    m_uart_event_queue{nullptr},
+    m_event_loop{nullptr},
+    m_enable_events{false}
 {
     // crea la instancia compartida de resultado de comando
     m_result_info = std::make_shared<internal::sim7000_cmd_result_info_t>();
@@ -151,6 +155,55 @@ esp_err_t SIM7000_Modem::init()
             esp_err_to_name(err)
         );
     }
+
+    return err;
+}
+
+esp_err_t SIM7000_Modem::enable_events(esp_event_loop_handle_t *event_loop)
+{
+    if (m_enable_events) return ESP_ERR_INVALID_STATE;
+
+    esp_err_t err;
+
+    // verifica si se recibió el puntero de un loop de eventos
+    if (event_loop) {
+        esp_event_loop_args_t args{};
+        args.queue_size = 10;
+        args.task_name = "sim7000_evt_task";
+        args.task_priority = 5;
+        args.task_stack_size = 1024 * 3;
+        args.task_core_id = tskNO_AFFINITY;
+
+        err = esp_event_loop_create(&args, event_loop);
+        m_event_loop = event_loop;
+    } else {
+        // crear el loop predeterminado de eventos 
+        err = esp_event_loop_create_default();
+        // verifica si el loop ya había sido creado
+        if (err == ESP_ERR_INVALID_STATE) {
+            err = ESP_OK;
+        }
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG, 
+            "Failed to create event loop (%s)",
+            esp_err_to_name(err)
+        );
+    }
+    
+    m_enable_events = err == ESP_OK;
+    return err;
+}
+
+esp_err_t SIM7000_Modem::disable_events()
+{
+    if (!m_enable_events) return ESP_ERR_INVALID_STATE;
+
+    esp_err_t err = esp_event_loop_delete(m_event_loop);
+    m_event_loop = nullptr;
+    m_enable_events = false;
 
     return err;
 }
@@ -1055,49 +1108,61 @@ void SIM7000_Modem::receive_uart_data(size_t length)
 
 void SIM7000_Modem::on_urc_message(std::string &payload)
 {
-    ESP_LOGI(TAG, "URC message received (%u bytes)", payload.length());
+    helpers::trim(payload, CRLF " ");
+    if (payload.empty()) return;
 
-    helpers::trim(payload, "\r\n ");
+    ESP_LOGI(TAG, "URC message received (%u bytes)", payload.length());
+    ESP_LOGI(TAG, "URC: %s", payload.c_str());
+
     auto def = get_urc_def(payload);
     if (def == nullptr) {
         return;
     }
     
-    ESP_LOGI(TAG, "URC: %s", payload.c_str());
-
     switch (def->urc)
     {
         case urc_t::DST:
+        {
             ESP_LOGI(TAG, "Refresh time zone by network");
+            post_event(MODEM_EVENT_DST_UPDATED);
             break;
+        }
         case urc_t::PSUTTZ:
             ESP_LOGI(TAG, "Refresh date and time by network");
+            post_event(MODEM_EVENT_DATE_TIME_UPDATED);
             break;
         case urc_t::PDP_DEACT:
             ESP_LOGI(TAG, "GRPS is disconnected by network");
             m_event_group.set_flags(PDP_DEACT_BIT);
+            post_event(MODEM_EVENT_PDP_DEACTIVE);
             break;
         case urc_t::APP_PDP_ACTIVE:
             ESP_LOGI(TAG, "TCP APP Tookit is now active");
             m_event_group.set_flags(APP_PDP_ACTIVE_BIT);
             m_event_group.clear_flags(APP_PDP_DEACTIVE_BIT);
+            post_event(MODEM_EVENT_APP_PDP_ACTIVE);
             break;
         case urc_t::APP_PDP_DEACTIVE:
             ESP_LOGI(TAG, "TCP APP Tookit is now active");
             m_event_group.set_flags(APP_PDP_DEACTIVE_BIT);
             m_event_group.clear_flags(APP_PDP_ACTIVE_BIT);
+            post_event(MODEM_EVENT_APP_PDP_DEACTIVE);
             break;
         case urc_t::CFUN:
-            ESP_LOGI(TAG, "Phone functionalitity has change");
+            ESP_LOGI(TAG, "Phone functionality has changed");
+            post_event(MODEM_EVENT_FUNC_CHANGED);
             break;
         case urc_t::CPIN:
             ESP_LOGI(TAG, "SIM Card status has changed");
+            post_cpin_event(payload);
             break;
         case urc_t::SMSUB:
             ESP_LOGI(TAG, "MQTT message received");
+            post_mqtt_event(payload);
             break;
         case urc_t::UGNSINF:
             ESP_LOGI(TAG, "GNSS Navigation Report");
+            post_gnss_event(payload);
             break;
         default:
             break;
@@ -1107,6 +1172,97 @@ void SIM7000_Modem::on_urc_message(std::string &payload)
 int SIM7000_Modem::on_cmd_write(const char *data, size_t length)
 {
     return uart_write_bytes(m_port, data, length); 
+}
+
+void SIM7000_Modem::post_event(int32_t id, TickType_t ticks_to_wait)
+{
+    post_event(id, NULL, 0, ticks_to_wait);
+}
+
+void SIM7000_Modem::post_event(int32_t id, void *data, size_t size, TickType_t ticks_to_wait)
+{
+    if (!m_enable_events) return;
+    esp_err_t err;
+
+    if (m_event_loop) {
+        err = esp_event_post_to(
+            m_event_loop, 
+            MODEM_EVENTS,
+            id,
+            data,
+            size,
+            ticks_to_wait
+        );
+    } else {
+        err = esp_event_post(
+            MODEM_EVENTS,
+            id,
+            data,
+            size,
+            ticks_to_wait
+        );
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG, 
+            "Failed to post event (%s)",
+            esp_err_to_name(err)
+        );
+    }
+}
+
+void SIM7000_Modem::post_cpin_event(std::string &payload)
+{
+    
+}
+
+void SIM7000_Modem::post_gnss_event(std::string &payload)
+{
+    gnss_nav_info_t info{};
+    helpers::parse_gnss_info(payload, info);
+    
+    post_event(
+        MODEM_EVENT_GNSS_NAVIGATION_REPORT, 
+        &info,
+        sizeof(gnss_nav_info_t)
+    );
+}
+
+void SIM7000_Modem::post_mqtt_event(std::string &payload)
+{
+    mqtt_message_t message{};
+    helpers::remove_before(payload, ": \"");
+
+    // obtiene la longitud del topico
+    size_t pos, length = payload.find_first_of("\",\"");
+    pos = length;
+    
+    if (length == std::string::npos) return;
+    if (length >= sizeof(message.topic)) {
+        ESP_LOGW(TAG, "Topic length is longer than expected (%u bytes)", length);
+        length = sizeof(message.topic) - 1;
+    }
+
+    // copia el tópico
+    payload.copy(message.topic, length, 0);
+
+    pos += 3; // desplaza despues del separador
+    length = payload.length() - pos - 1;
+
+    if (length >= sizeof(message.content)) {
+        ESP_LOGW(TAG, "Content length is longer than expected (%u bytes)", length);
+    }
+
+    // copia el contenido
+    payload.copy(message.content, length, pos);
+
+    post_event(
+        MODEM_EVENT_MQTT_MESSAGE_RECEIVED, 
+        &message, 
+        sizeof(message),
+        portMAX_DELAY
+    );
 }
 
 esp_err_t SIM7000_Modem::execute_internal_cmd_no_answer(
