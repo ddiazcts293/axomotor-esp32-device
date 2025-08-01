@@ -87,14 +87,20 @@ SIM7000_Modem::SIM7000_Modem(
 
 esp_err_t SIM7000_Modem::init()
 {
+    if (m_is_running) return ESP_ERR_INVALID_STATE;
+
     std::lock_guard lock(m_mutex);
     esp_err_t err;
     at_cmd_t cmd;
     std::string &res = m_result_info->response;
 
     ESP_LOGI(TAG, "Waiting for module starting...");
+    
     // inicia el servicio subyacente y espera hasta que este termine de configurarse
     err = start(true);
+    if (err != ESP_OK) {
+        return err;
+    }
 
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "Module has started");
@@ -137,8 +143,6 @@ esp_err_t SIM7000_Modem::init()
     if (err == ESP_OK) {
         helpers::remove_before(res, ": ");
         ESP_LOGI(TAG, "SIM status: %s", res.c_str());
-
-        m_status.is_active = true;
     } else {
         ESP_LOGE(
             TAG,
@@ -159,7 +163,7 @@ esp_err_t SIM7000_Modem::set_apn(const apn_config_t &config)
     // copia la configuración
     memcpy(&m_apn, &config, sizeof(apn_config_t));
 
-    if (m_status.is_active) {
+    if (m_is_running) {
         // verifica si GRPS está activo
         if (m_status.is_grps_active) {
             err = config_gprs();
@@ -457,6 +461,8 @@ esp_err_t SIM7000_Modem::activate_network()
 {
     std::lock_guard lock(m_mutex);
     network_active_status_t status;
+    ESP_LOGI(TAG, "Activating network");
+
     esp_err_t result = get_net_active_status(status);
 
     if (result == ESP_OK && status == network_active_status_t::DEACTIVED) {
@@ -998,6 +1004,7 @@ esp_err_t SIM7000_Modem::setup()
     xQueueReset(m_uart_event_queue);
 
     if (result == ESP_OK) {
+        m_is_running = true;
         ESP_LOGI(TAG, "SIM7000 module ready");
     } else {
         ESP_LOGE(TAG, "Failed to initialize SIM7000 module");
