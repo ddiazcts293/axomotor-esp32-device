@@ -90,7 +90,7 @@ esp_err_t ServiceBase::start(bool wait_for_setup)
 
         if (flags & SERVICE_SETUP_FAILED_BIT) {
             ESP_LOGE(TAG, "Task setup failed");
-            return ESP_FAIL;
+            return m_setup_err;
         }
     }
 
@@ -162,14 +162,12 @@ void ServiceBase::run()
     m_event_group.set_flags(SERVICE_STARTED_BIT);
 
     // configura el servicio
-    esp_err_t setup_result = setup();
-    // establece el indicador de configuración de servicio
-    m_event_group.set_flags(setup_result == ESP_OK ? 
-        SERVICE_SETUP_COMPLETED_BIT : 
-        SERVICE_SETUP_FAILED_BIT);
-
-    if (setup_result == ESP_OK) {
+    m_setup_err = setup();
+    
+    if (m_setup_err == ESP_OK) {
         ESP_LOGD(TAG, "Service '%s' setup is completed", name);
+        // establece el indicador de configuración de servicio
+        m_event_group.set_flags(SERVICE_SETUP_COMPLETED_BIT);
 
         // ejecuta el bucle del servicio hasta recibir la solicitud de alto
         while ((m_event_group.get_flags() & SERVICE_STOP_REQUESTED_BIT) == 0) {
@@ -184,7 +182,10 @@ void ServiceBase::run()
             TAG, 
             "Service '%s' setup has failed (%s)", 
             name, 
-            esp_err_to_name(setup_result));
+            esp_err_to_name(m_setup_err));
+
+        m_event_group.set_flags(SERVICE_SETUP_FAILED_BIT);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     // crea una máscara de bits con los indicadores que deberán desactivarse

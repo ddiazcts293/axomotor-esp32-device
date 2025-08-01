@@ -48,8 +48,8 @@ protected:
 private:
     TaskHandle_t m_task_handle;
     EventGroup m_event_group;
-    
     esp_pthread_cfg_t m_pthread_config;
+    esp_err_t m_setup_err;
     std::thread m_thread;
 
     void run();
