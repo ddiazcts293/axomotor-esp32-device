@@ -1,241 +1,301 @@
 #include "sim7000_mqtt_service.hpp"
+#include "sim7000_helpers.hpp"
 #include <esp_log.h>
+#include <cstring>
 
 namespace axomotor::lte_modem
 {
+    using namespace axomotor::lte_modem::internal;
+    
     static const char *TAG = "sim7000:mqtt";
 
-    SIM7000_MQTT::SIM7000_MQTT(std::weak_ptr<SIM7000_Modem> modem, const int rx_bufsize) : 
-        SIM7000_Service(modem),
-        m_rx_bufsize{rx_bufsize},
-        m_rx_buffer{new char[rx_bufsize]}
-    { }
-
-    SIM7000_MQTT::~SIM7000_MQTT()
-    {
-        delete[] m_rx_buffer;
+    SIM7000_MQTT::SIM7000_MQTT(
+        std::weak_ptr<SIM7000_Modem> modem,
+        int message_buffer_size,
+        int response_buffer_size) : SIM7000_Service(modem)
+    { 
+        m_result_info = std::make_shared<internal::sim7000_cmd_result_info_t>();
+        m_result_info->response.reserve(response_buffer_size);
     }
 
     esp_err_t SIM7000_MQTT::init()
     {
-        esp_err_t result = check_modem_ptr();
-        if (result != ESP_OK)
-            return result;
-
-        // obtiene una referencia a la instancia del modem
-        SIM7000_Modem &modem = *m_modem.lock();
-
-        // activa la red
-        result = modem.activate_network();
-        if (result != ESP_OK) {
+        if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+        auto modem = m_modem.lock();
+        ESP_LOGI(TAG, "HERE");
+        esp_err_t err = modem->activate_network();
+        if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize MQTT client");
         }
 
-        return result;
+        return err;
+    }
+
+    esp_err_t SIM7000_MQTT::deinit()
+    {
+        m_result_info->reset();
+        return ESP_OK;
     }
 
     esp_err_t SIM7000_MQTT::set_config(const mqtt_config_t &config)
     {
-        std::string payload;
-        esp_err_t result = check_modem_ptr();
-        if (result != ESP_OK)
-            return result;
-        /*
-            // veifica la URL del broker
-            if (strlen(config.broker) == 0) {
-                ESP_LOGE(TAG, "Missing MQTT broker address");
-                return ESP_ERR_INVALID_ARG;
-            }
+        if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+        auto modem = m_modem.lock();
+        esp_err_t err;
+        std::string cmd_params;
 
-            // obtiene una referencia a la instancia del modem
-            SIM7000_Modem &modem = *m_modem.lock();
+        // veifica la URL del broker
+        if (!config.broker || strlen(config.broker) == 0) {
+            ESP_LOGE(TAG, "Missing MQTT broker address");
+            return ESP_ERR_INVALID_ARG;
+        }
 
-            // establece la url y el puerto
-            payload.append("=\"URL\",\"").append(config.broker).append("\"");
-            if (config.port != 0) {
-                payload.append(",\"")
-                    .append(std::to_string(config.port))
-                    .append("\"");
-            }
+        // establece la url y el puerto
+        cmd_params.append("=\"URL\",\"").append(config.broker).append("\"");
+        if (config.port != 0) {
+            cmd_params.append(",\"")
+                .append(std::to_string(config.port))
+                .append("\"");
+        }
 
-            result = modem.execute_internal_cmd_no_answer(at_cmd_t::SMCONF, payload);
+        err = modem->execute_cmd(at_cmd_t::SMCONF, cmd_params, m_result_info);
+        // verifica si se recibió un identificador de cliente
+        if (err == ESP_OK && config.client_id) {
+            cmd_params.clear();
+            cmd_params.append("=\"CLIENTID\",\"")
+                .append(config.client_id)
+                .append("\"");
+            err = modem->execute_cmd(at_cmd_t::SMCONF, cmd_params, m_result_info);
+        }
 
-            // verifica si se recibió un identificador de cliente
-            if (result == ESP_OK && strlen(config.client_id) > 0) {
-                payload.clear();
-                payload.append("=\"CLIENTID\",\"")
-                    .append(config.client_id)
-                    .append("\"");
+        // verifica si se recibió un nombre de usuario
+        if (err == ESP_OK && config.username) {
+            cmd_params.clear();
+            cmd_params.append("=\"USERNAME\",\"")
+                .append(config.username)
+                .append("\"");
+            err = modem->execute_cmd(at_cmd_t::SMCONF, cmd_params, m_result_info);
+        }
 
-                result = modem.execute_internal_cmd_no_answer(at_cmd_t::SMCONF, payload);
-            }
+        // verifica si se recibió una contraseña
+        if (err == ESP_OK && config.password) {
+            cmd_params.clear();
+            cmd_params.append("=\"PASSWORD\",\"")
+                .append(config.password)
+                .append("\"");
+            err = modem->execute_cmd(at_cmd_t::SMCONF, cmd_params, m_result_info);
+        }
 
-            // verifica si se recibió un nombre de usuario
-            if (result == ESP_OK && strlen(config.username) > 0) {
-                payload.clear();
-                payload.append("=\"USERNAME\",\"")
-                    .append(config.username)
-                    .append("\"");
+        // verifica si se recibió un keep time diferente de 60
+        if (err == ESP_OK && config.keep_time != 60) {
+            cmd_params.clear();
+            cmd_params.append("=\"KEEPTIME\",")
+                .append(std::to_string(config.keep_time));
+            err = modem->execute_cmd(at_cmd_t::SMCONF, cmd_params, m_result_info);
+        }
 
-                result = modem.execute_internal_cmd_no_answer(at_cmd_t::SMCONF, payload);
-            }
+        // verifica si se recibió un session cleaning diferente de 60
+        if (err == ESP_OK && config.session_cleaning != 0) {
+            cmd_params.clear();
+            cmd_params.append("=\"CLEANSS\",")
+                .append(std::to_string(config.session_cleaning));
 
-            // verifica si se recibió una contraseña
-            if (result == ESP_OK && strlen(config.password) > 0) {
-                payload.clear();
-                payload.append("=\"PASSWORD\",\"")
-                    .append(config.password)
-                    .append("\"");
+            err = modem->execute_cmd(at_cmd_t::SMCONF, cmd_params, m_result_info);
+        }
 
-                result = modem.execute_internal_cmd_no_answer(at_cmd_t::SMCONF, payload);
-            }
+        // verifica si se recibió un QoS diferente de 60
+        if (err == ESP_OK && config.qos != 0) {
+            cmd_params.clear();
+            cmd_params.append("=\"QOS\",")
+                .append(std::to_string(config.qos));
+            err = modem->execute_cmd(at_cmd_t::SMCONF, cmd_params, m_result_info);
+        }
 
-            // verifica si se recibió un keep time diferente de 60
-            if (result == ESP_OK && config.keep_time != 60) {
-                payload.clear();
-                payload.append("=\"KEEPTIME\",")
-                    .append(std::to_string(config.keep_time));
+        if (err != ESP_OK) {
+            cmd_params.erase(0, 1);
 
-                result = modem.execute_internal_cmd_no_answer(at_cmd_t::SMCONF, payload);
-            }
-
-            // verifica si se recibió un session cleaning diferente de 60
-            if (result == ESP_OK && config.session_cleaning != 0) {
-                payload.clear();
-                payload.append("=\"CLEANSS\",")
-                    .append(std::to_string(config.session_cleaning));
-
-                result = modem.execute_internal_cmd_no_answer(at_cmd_t::SMCONF, payload);
-            }
-
-            // verifica si se recibió un QoS diferente de 60
-            if (result == ESP_OK && config.qos != 0) {
-                payload.clear();
-                payload.append("=\"QOS\",")
-                    .append(std::to_string(config.qos));
-
-                result = modem.execute_internal_cmd_no_answer(at_cmd_t::SMCONF, payload);
-            }
-
-            if (result != ESP_OK) {
-                ESP_LOGE(
-                    TAG,
-                    "Failed to set MQTT configuration (%s)",
-                    esp_err_to_name(result)
-                );
-            }
-         */
-        return result;
+            ESP_LOGE(
+                TAG,
+                "Failed to set MQTT configuration (param: %s)",
+                cmd_params.c_str()
+            );
+        }
+         
+        return err;
     }
 
     esp_err_t SIM7000_MQTT::connect(TickType_t ticks_to_wait)
     {
-        std::string payload;
-        esp_err_t result = check_modem_ptr();
-        if (result != ESP_OK)
-            return result;
-        /*
-        // obtiene una referencia a la instancia del modem
-        SIM7000_Modem &modem = *m_modem.lock();
+        if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+        auto modem = m_modem.lock();
+        bool current_state = false;
+        esp_err_t err;
+        // consulta el estado de la conexión MQTT
+        err = get_state(current_state);
 
-        // consulta el estado actual de la red
-        result = modem.set_net_active_status(network_active_mode_t::ACTIVE);
+        if (err == ESP_OK) {
+            // verifica si el cliente no está conectado
+            if (!current_state) {
+                // asegura que la red este activa
+                err = modem->activate_network();
+            
+                if (err == ESP_OK) {
+                    ESP_LOGI(TAG, "Connecting to MQTT broker...");
+                    err = modem->execute_cmd(
+                        at_cmd_t::SMCONN, 
+                        m_result_info, 
+                        ticks_to_wait);
 
-        if (result == ESP_OK) {
-            // obtiene el estado de conexión
-            index = response.find_first_of(": ") + 2;
-            uint8_t mode = helpers::to_number<uint8_t>(response, index);
-
-            // verifica si el estado actual es desactivado
-            if (mode == 0) {
-                // activa la red
-                ESP_LOGI(TAG, "Network is not active, activating...");
-                result = execute_internal_cmd(at_cmd_t::CNACT, 0, "=1");
+                    if (err == ESP_OK) {
+                        ESP_LOGI(TAG, "MQTT connection successful");
+                    } else {
+                        ESP_LOGE(
+                            TAG,
+                            "Failed to connect to MQTT broker (%s)",
+                            esp_err_to_name(err)
+                        );
+                    }
+                } else {
+                    ESP_LOGE(
+                        TAG,
+                        "Failed to activate network (%s)",
+                        esp_err_to_name(err)
+                    );
+                }
+            } else {
+                ESP_LOGI(TAG, "MQTT client is already connected");
             }
         }
-
-        if (result == ESP_OK) {
-            // consulta el estado de la conexión MQTT
-            result = execute_internal_cmd(at_cmd_t::SMSTATE, 0, "?");
-        }
-
-        if (result == ESP_OK) {
-            // obtiene el estado de conexión MQTT
-            index = response.find_first_of(": ") + 2;
-            uint8_t status = helpers::to_number<uint8_t>(response, index);
-
-            // verifica si no está conectado con el broker
-            if (status == 0) {
-                ESP_LOGI(TAG, "MQTT is disconnected, connecting...");
-
-                // intenta conectar con el broker
-                result = execute_internal_cmd(at_cmd_t::SMCONN, pdMS_TO_TICKS(10000));
-            }
-        }
-
-        if (result == ESP_OK) {
-            ESP_LOGI(TAG, "MQTT connection success");
-        } else {
-            ESP_LOGI(
-                TAG,
-                "Failed to connect to MQTT broker (%s)",
-                esp_err_to_name(result)
-            );
-        }
-    */
-        return result;
+        
+        return err;
     }
 
     esp_err_t SIM7000_MQTT::disconnect()
     {
-        esp_err_t result = ESP_OK;
-        /*
-            // espera hasta que el modulo esté disponible
-            ESP_LOGI(TAG, "Disconnecting from MQTT broker...");
-            m_event_group.wait_for_availability();
+        if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+        auto modem = m_modem.lock();
+        bool current_state = false;
+        esp_err_t err;
 
-            // intenta desconectar del broker
-            result = execute_internal_cmd(at_cmd_t::SMDISC, 0);
-            if (result == ESP_OK) {
-                // desactiva la red
-                result = execute_internal_cmd(at_cmd_t::CNACT, 0, "=0");
-            }
-
-            if (result == ESP_OK) {
-                ESP_LOGI(TAG, "MQTT disconnection success");
+        // consulta el estado de la conexión MQTT
+        err = get_state(current_state);
+        if (err == ESP_OK) {
+            if (current_state) {
+                ESP_LOGI(TAG, "Disconnecting from MQTT broker...");
+                err = modem->execute_cmd(at_cmd_t::SMDISC, m_result_info);
+                
+                if (err == ESP_OK) {
+                    ESP_LOGI(TAG, "MQTT disconnection successful");
+                } else {
+                    ESP_LOGE(
+                        TAG,
+                        "Failed to disconnect from MQTT broker (%s)",
+                        esp_err_to_name(err)
+                    );
+                }
             } else {
-                ESP_LOGI(
-                    TAG,
-                    "Failed to disconnect from MQTT broker (%s)",
-                    esp_err_to_name(result)
-                );
+                ESP_LOGI(TAG, "MQTT client is already disconnected");
             }
-
-            // hace que el modulo este disponible
-            m_event_group.leave();
-        */
-        return result;
+        }
+        
+        return err;
     }
 
-    esp_err_t SIM7000_MQTT::get_status()
+    esp_err_t SIM7000_MQTT::get_state(bool &state)
     {
-        std::string payload;
-        esp_err_t result = check_modem_ptr();
-        if (result != ESP_OK)
-            return result;
+        if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+        auto modem = m_modem.lock();
+        esp_err_t err;
+        std::string &res = m_result_info->response;
 
-        // result = modem.execute_internal_cmd(at_cmd_t::SMSTATE, "?", payload);
+        err = modem->execute_cmd(at_cmd_t::SMSTATE, "?", m_result_info);
+        if (err == ESP_OK) {
+            // verifica si la respuesta termina en 1
+            state = res.ends_with("1");
+        } else {
+            ESP_LOGE(TAG, "Failed to get MQTT state");
+        }
 
-        return ESP_OK;
+        return err;
+    }
+
+    esp_err_t SIM7000_MQTT::publish(const char *topic, uint8_t qos, bool retain)
+    {
+        return publish(topic, std::span<const char>(), qos , retain);
     }
 
     esp_err_t SIM7000_MQTT::publish(
         const char *topic,
-        const char *msg,
-        size_t msg_length,
-        uint8_t qos)
+        std::span<const char> msg,
+        uint8_t qos,
+        bool retain)
     {
-        return ESP_OK;
+        if (!topic || strlen(topic) == 0) return ESP_ERR_INVALID_ARG;
+        if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+        
+        auto modem = m_modem.lock();
+        esp_err_t err;
+        std::string params = "=\"";
+        params.append(topic);
+        params.append("\",");
+        params.append(std::to_string(msg.size()));
+        params.append(",");
+        params.append(std::to_string(qos));
+        params.append(",");
+        params.append(retain ? "1" : "0");
+        
+        sim7000_cmd_context_t context;
+        context.command = at_cmd_t::SMPUB;
+        context.params = params;
+        context.payload = msg;
+        context.send_payload = true;
+        context.result_info = m_result_info;
+
+        err = modem->execute_cmd(context);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to publish MQTT message");
+        }
+
+        return err;
+    }
+
+    esp_err_t SIM7000_MQTT::subscribe(const char *topic, uint8_t qos)
+    {
+        if (!topic || strlen(topic) == 0) return ESP_ERR_INVALID_ARG;
+        if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+        
+        auto modem = m_modem.lock();
+        esp_err_t err;
+        std::string params = "=\"";
+        params.append(topic);
+        params.append("\",");
+        params.append(std::to_string(qos));
+
+        err = modem->execute_cmd(at_cmd_t::SMSUB, params, m_result_info);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to subscribe to MQTT topic");
+        }
+
+        return err;
+    }
+
+    esp_err_t SIM7000_MQTT::unsubscribe(const char *topic)
+    {
+        if (!topic || strlen(topic) == 0) return ESP_ERR_INVALID_ARG;
+        if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+        
+        auto modem = m_modem.lock();
+        esp_err_t err;
+        std::string params = "=\"";
+        params.append(topic);
+        params.append("\"");
+
+        err = modem->execute_cmd(at_cmd_t::SMUNSUB, params, m_result_info);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to unsubscribe from MQTT topic");
+        }
+
+        return err;
     }
 
 } // namespace axomotor::lte_modem
