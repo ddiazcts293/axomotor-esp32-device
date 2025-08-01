@@ -105,4 +105,45 @@ namespace axomotor::lte_modem::helpers
         return epoch;
     }
 
+    void parse_gnss_info(std::string &payload, gnss_nav_info_t &info)
+    {
+        std::string aux;
+
+        // quita el inicio del comando
+        remove_before(payload, ": ");
+        // obtiene el estado de ejecución
+        extract_token(payload, 0, ",", aux, true);
+        info.run_status = to_number<uint8_t>(aux);
+        // obtiene el indicador FIX
+        extract_token(payload, 1, ",", aux, true);
+        info.fix_status = to_number<uint8_t>(aux);//fields[1]);
+        // obtiene la fecha y hora
+        extract_token(payload, 2, ",", aux, true);
+        info.date_time = to_number<uint64_t>(aux);//fields[2]);
+        // obtiene la latitud
+        extract_token(payload, 3, ",", aux, true);
+        info.latitude = to_number<float>(aux);//fields[3]);
+        // obtiene la longitud
+        extract_token(payload, 4, ",", aux, true);
+        info.longitude = to_number<float>(aux);//fields[4]);
+        // obtiene la altitud
+        extract_token(payload, 5, ",", aux, true);
+        info.msl_altitude = to_number<float>(aux);//fields[5]);
+        // obtiene la velocidad
+        extract_token(payload, 6, ",", aux, true);
+        info.speed_over_ground = to_number<float>(aux);//fields[6]);
+        // obtiene el curso sobre la tierra
+        extract_token(payload, 7, ",", aux, true);
+        info.course_over_ground = to_number<float>(aux);//fields[7]);
+        // obtiene el indicador FIX MODE
+        extract_token(payload, 8, ",", aux, true);
+        info.fix_mode = to_number<uint8_t>(aux);//fields[8]);
+        // obtiene la cantidad de satelites de GNSS en vista
+        extract_token(payload, 14, ",", aux, true);
+        info.gnss_satellites = to_number<uint8_t>(aux);//fields[14]);
+        // obtiene la cantidad de satelites de GPS en vista
+        extract_token(payload, 15, ",", aux, true);
+        info.gps_satellites = to_number<uint8_t>(aux);//fields[15]);
+    }
+
 } // namespace axomotor::lte_modem

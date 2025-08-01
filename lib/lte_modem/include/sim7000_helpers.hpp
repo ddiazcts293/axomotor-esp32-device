@@ -7,6 +7,8 @@
 #include <type_traits>
 #include <span>
 
+#include "sim7000_types.hpp"
+
 namespace axomotor::lte_modem::helpers
 {
     struct split_str_t
@@ -272,4 +274,6 @@ namespace axomotor::lte_modem::helpers
     /// @return Marca de tiempo Epoch Unix.
     time_t gps_ts_to_epoch_ts(uint64_t gps_timestamp);
     
+    void parse_gnss_info(std::string &payload, gnss_nav_info_t &info);
+
 } // namespace axomotor::lte_modem

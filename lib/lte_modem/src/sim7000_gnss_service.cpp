@@ -14,21 +14,33 @@ SIM7000_GNSS::SIM7000_GNSS(std::weak_ptr<SIM7000_Modem> modem) :
     m_result_info->response.reserve(120);
 }
 
-esp_err_t SIM7000_GNSS::set_state(bool state)
+esp_err_t SIM7000_GNSS::turn_on()
 {
     if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
     auto modem = m_modem.lock();
 
-    ESP_LOGI(TAG, "Turning GNSS %s...",  state ? "on" : "off");
-    esp_err_t err = modem->execute_cmd(
-        at_cmd_t::CGNSPWR,
-        state ? "=1" : "=0",
-        m_result_info);
-
+    ESP_LOGI(TAG, "Turning GNSS on");
+    esp_err_t err = modem->execute_cmd(at_cmd_t::CGNSPWR, "=1", m_result_info);
+        
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to change GNSS state");
+        ESP_LOGE(TAG, "Failed to turn on GNSS");
     }
+    
+    return err;
+}
 
+esp_err_t SIM7000_GNSS::turn_off()
+{
+    if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+    auto modem = m_modem.lock();
+
+    ESP_LOGI(TAG, "Turning GNSS off");
+    esp_err_t err = modem->execute_cmd(at_cmd_t::CGNSPWR, "=0", m_result_info);
+        
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to turn off GNSS");
+    }
+    
     return err;
 }
 
@@ -51,6 +63,56 @@ esp_err_t SIM7000_GNSS::get_state(bool &state)
     return err;
 }
 
+esp_err_t SIM7000_GNSS::enable_nav_urc(uint8_t interval)
+{
+    if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+    auto modem = m_modem.lock();
+    std::string params = "=";
+    params.append(std::to_string(interval));
+
+    ESP_LOGI(TAG, "Enabling GNSS reporting...");
+
+    esp_err_t err = modem->execute_cmd(at_cmd_t::CGNSURC, params, m_result_info);        
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable GNSS reporting");
+    }
+    
+    return err;
+}
+
+esp_err_t SIM7000_GNSS::disable_nav_urc()
+{
+    if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+    auto modem = m_modem.lock();
+
+    ESP_LOGI(TAG, "Disabling GNSS reporting...");
+
+    esp_err_t err = modem->execute_cmd(at_cmd_t::CGNSURC, "=0", m_result_info);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to disable GNSS reporting");
+    }
+    
+    return err;
+}
+
+esp_err_t SIM7000_GNSS::get_nav_urc_state(bool &state)
+{
+    if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
+    auto modem = m_modem.lock();
+    std::string &res = m_result_info->response;
+
+    ESP_LOGI(TAG, "Getting GNSS reporting state...");
+
+    esp_err_t err = modem->execute_cmd(at_cmd_t::CGNSURC, "?", m_result_info);
+    if (err == ESP_OK) {
+        state = !res.ends_with("0");
+    } else {
+        ESP_LOGE(TAG, "Failed to get GNSS reporting state");
+    }
+    
+    return err;
+}
+
 esp_err_t SIM7000_GNSS::get_nav_info(gnss_nav_info_t &info)
 {
     if (m_modem.expired()) return ESP_ERR_INVALID_STATE;
@@ -63,41 +125,7 @@ esp_err_t SIM7000_GNSS::get_nav_info(gnss_nav_info_t &info)
     std::string aux;
 
     if (result == ESP_OK) {
-        // quita el inicio del comando
-        helpers::remove_before(response, ": ");
-        // obtiene el estado de ejecución
-        helpers::extract_token(response, 0, ",", aux, true);
-        info.run_status = helpers::to_number<uint8_t>(aux);
-        // obtiene el indicador FIX
-        helpers::extract_token(response, 1, ",", aux, true);
-        info.fix_status = helpers::to_number<uint8_t>(aux);//fields[1]);
-        // obtiene la fecha y hora
-        helpers::extract_token(response, 2, ",", aux, true);
-        info.date_time = helpers::to_number<uint64_t>(aux);//fields[2]);
-        // obtiene la latitud
-        helpers::extract_token(response, 3, ",", aux, true);
-        info.latitude = helpers::to_number<float>(aux);//fields[3]);
-        // obtiene la longitud
-        helpers::extract_token(response, 4, ",", aux, true);
-        info.longitude = helpers::to_number<float>(aux);//fields[4]);
-        // obtiene la altitud
-        helpers::extract_token(response, 5, ",", aux, true);
-        info.msl_altitude = helpers::to_number<float>(aux);//fields[5]);
-        // obtiene la velocidad
-        helpers::extract_token(response, 6, ",", aux, true);
-        info.speed_over_ground = helpers::to_number<float>(aux);//fields[6]);
-        // obtiene el curso sobre la tierra
-        helpers::extract_token(response, 7, ",", aux, true);
-        info.course_over_ground = helpers::to_number<float>(aux);//fields[7]);
-        // obtiene el indicador FIX MODE
-        helpers::extract_token(response, 8, ",", aux, true);
-        info.fix_mode = helpers::to_number<uint8_t>(aux);//fields[8]);
-        // obtiene la cantidad de satelites de GNSS en vista
-        helpers::extract_token(response, 14, ",", aux, true);
-        info.gnss_satellites = helpers::to_number<uint8_t>(aux);//fields[14]);
-        // obtiene la cantidad de satelites de GPS en vista
-        helpers::extract_token(response, 15, ",", aux, true);
-        info.gps_satellites = helpers::to_number<uint8_t>(aux);//fields[15]);
+        helpers::parse_gnss_info(response, info);
     } else {
         ESP_LOGE(TAG, "Failed to retrieve GNSS information");
     }
