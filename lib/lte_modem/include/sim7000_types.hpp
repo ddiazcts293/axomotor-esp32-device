@@ -584,16 +584,24 @@ struct sim7000_cmd_context_t
     sim7000_cmd_context_t() { reset(); }
 
     at_cmd_t command;
+    std::span<const char> params;
+    std::span<const char> payload;
+    std::shared_ptr<sim7000_cmd_result_info_t> result_info;
     bool is_raw;
     bool is_partial;
+    bool send_payload;
     bool ignore_response;
     bool response_received;
 
     void reset()
     {
         command = at_cmd_t::NONE;
+        params = std::span<const char>();
+        payload = std::span<const char>();
+        result_info.reset();
         is_raw = false;
         is_partial = false;
+        send_payload = false;
         ignore_response = false;
         response_received = false;
     }
@@ -601,12 +609,20 @@ struct sim7000_cmd_context_t
 
 struct sim7000_status_t
 {
+    sim7000_status_t() : 
+        is_echo_disabled{false},
+        is_grps_active{false},
+        is_tcp_active{false},
+        is_ip_active{false},
+        is_gnss_turned_on{false},
+        is_gnss_urc_enabled{false},
+        is_mqtt_enabled{false}
+    { }
+
     bool is_echo_disabled : 1;
     bool is_grps_active : 1;
     bool is_tcp_active : 1;
     bool is_ip_active : 1;
-    bool is_active : 1;
-
     bool is_gnss_turned_on : 1;
     bool is_gnss_urc_enabled : 1;
     bool is_mqtt_enabled : 1;
@@ -708,6 +724,11 @@ struct apn_config_t
 
 struct gnss_nav_info_t 
 {
+    gnss_nav_info_t()
+    { 
+        reset();
+    }
+
     uint64_t date_time; // 20250627222325
     float latitude;
     float longitude;
@@ -719,14 +740,40 @@ struct gnss_nav_info_t
     uint8_t run_status      : 1;
     uint8_t fix_status      : 1;
     uint8_t fix_mode        : 2;
+
+    void reset()
+    {
+        date_time = 0;
+        latitude = 0;
+        longitude = 0;
+        msl_altitude = 0;
+        speed_over_ground = 0;
+        course_over_ground = 0;
+        gnss_satellites = 0;
+        gps_satellites = 0;
+        run_status = 0;
+        fix_status = 0;
+        fix_mode = 0 ;
+    }
 };
 
 struct mqtt_config_t
 {
-    char client_id[32];
-    char broker[64];
-    char username[32];
-    char password[32];
+    mqtt_config_t() :
+        client_id{nullptr},
+        broker{nullptr},
+        username{nullptr},
+        password{nullptr},
+        port{1883},
+        keep_time{60},
+        session_cleaning{true},
+        qos{1}
+    { }
+
+    const char *client_id;
+    const char *broker;
+    const char *username;
+    const char *password;
     uint32_t port;
     uint16_t keep_time;
     bool session_cleaning;
