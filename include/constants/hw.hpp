@@ -3,6 +3,7 @@
 #include <hal/gpio_types.h>
 #include <hal/uart_types.h>
 #include <hal/ledc_types.h>
+#include <hal/i2c_types.h>
 #include <esp_camera.h>
 
 namespace axomotor::constants::hw {
@@ -47,5 +48,15 @@ constexpr const ledc_channel_t LEDC_CHANNEL = LEDC_CHANNEL_0;
 
 } // namespace camera
 
+namespace sensor {
+
+constexpr const gpio_num_t PIN_SCL = GPIO_NUM_47;
+constexpr const gpio_num_t PIN_SDA = GPIO_NUM_21;
+constexpr const gpio_num_t PIN_VIBRATION_SENSOR = GPIO_NUM_14;
+
+constexpr const i2c_port_t I2C_PORT = I2C_NUM_0;
+constexpr const int I2C_FREQ_HZ = 100000UL;
+
+} // namespace sensor
 
 } // namespace axomotor::constants::hw
