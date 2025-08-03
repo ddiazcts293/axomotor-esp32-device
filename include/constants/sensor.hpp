@@ -10,7 +10,9 @@
 #define ALPHA               0.95f   // Filtro pasabajas para suaviar la señal
 #define FS                  100.0f  // Frecuencia mínima de muestreo (Hz)
 #define DT                  (1.0f / FS)
-#define CURVE_CONFIRM_COUNT 5
+#define CURVE_CONFIRM_COUNT 10
 #define BRAKE_CONFIRM_COUNT 5
 #define IMPACT_CONFIRM_COUNT 5
 #define ACCEL_CONFIRM_COUNT 5
+
+#define LAST_EVENT_DELAY    2000

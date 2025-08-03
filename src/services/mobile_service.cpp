@@ -1,19 +1,29 @@
 #include "services/mobile_service.hpp"
 #include "constants/hw.hpp"
+#include "constants/secrets.hpp"
+#include "constants/general.hpp"
+#include "sim7000_helpers.hpp"
 
 #include <esp_log.h>
 
 namespace axomotor::services {
 
 using namespace axomotor::constants::hw::modem;
+using namespace axomotor::constants::secrets;
+using namespace axomotor::constants::general;
+using namespace axomotor::events;
 using namespace axomotor::lte_modem;
 
 constexpr static const char *TAG = "mobile_service";
 
-MobileService::MobileService() : ServiceBase{TAG, 8 * 1024, 10}
-{ 
+MobileService::MobileService(std::shared_ptr<events::EventQueueSet> queue_set) : 
+    ServiceBase{TAG, 8 * 1024, 10},
+    m_queue_set{queue_set},
+    m_gps_signal_lost{false}
+{
     m_modem = std::make_shared<SIM7000_Modem>(UART_PORT, PIN_U1_RX, PIN_U1_TX, PIN_PWR);
     m_gnss = std::make_shared<SIM7000_GNSS>(m_modem);
+    m_mqtt = std::make_shared<SIM7000_MQTT>(m_modem);
     
     apn_config_t config = {
         .apn = "internet.itelcel.com",
@@ -30,41 +40,256 @@ esp_err_t MobileService::setup()
     esp_err_t result = m_modem->init();
     if (result == ESP_OK) {
         m_modem->enable_comm();
+        m_modem->enable_events();
     }
 
-    /*
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    esp_event_handler_register(MODEM_EVENTS, ESP_EVENT_ANY_ID, on_event, this);
 
-    mqtt_config_t config = 
-    {
-        .client_id = "esp32-0323105860",
-        .broker = "broker.emqx.io",
-        .port = 1883,
-        .session_cleaning = true,
-        .qos = 1
-    };
-
-    m_modem.set_mqtt_config(config);
-    m_modem.connect_to_mqtt(); */
+    mqtt_config_t config;
+    config.client_id = MQTT_CLIENT_ID;
+    config.username = MQTT_USERNAME;
+    config.password = MQTT_PASSWORD;
+    config.broker = SERVER_HOSTNAME;
+    
+    m_gnss->turn_on();
+    //m_gnss->enable_nav_urc(POSITION_REPORT_INTERVAL);
+    m_gnss->disable_nav_urc();
+    
+    m_mqtt->set_config(config);
+    m_mqtt->connect();
+    m_mqtt->subscribe("device/1/ping");
 
     return result;
 }
 
 void MobileService::loop()
 {
-    gnss_nav_info_t info{};
     int8_t signal_quality;
     std::string op_name;
     network_reg_status_t reg_status;
+    bool is_mqtt_active;
+    esp_err_t err;
 
+    err = m_mqtt->get_state(is_mqtt_active);
+    if (err != ESP_OK || !is_mqtt_active) {
+        err = m_mqtt->connect();
+        m_mqtt->subscribe("device/1/ping");
+    }
+
+    event_type_t type = m_queue_set->wait_for_event(pdMS_TO_TICKS(30000));
+
+    switch (type) 
+    {
+        case event_type_t::POSITION: 
+        {
+            position_event_t event{};
+            m_queue_set->position().receive(event, 0);
+            err = publish_position(event);
+            break;
+        } 
+        case event_type_t::DEVICE: 
+        {
+            device_event_t event{};
+            m_queue_set->device().receive(event, 0);
+            err = publish_event(event);
+            break;
+        }
+        case event_type_t::SERVER_PING:
+        {
+            ping_event_t event{};
+            m_queue_set->ping().receive(event, 0);
+            err = publish_pong(event);
+            break;
+        }
+        default:
+            break;
+    }
+    
     m_modem->get_signal_strength(signal_quality);
     m_modem->get_current_operator(op_name);
     m_modem->get_network_reg_status(reg_status);
+}
 
-    m_gnss->get_nav_info(info);
-    ESP_LOGI(TAG, "latitude=%.6f, longitude=%.6f", info.latitude, info.longitude);
+esp_err_t MobileService::publish_position(position_event_t &event)
+{
+    char payload[180];
+    int length;
+    const char topic[] = "trip/688f1945c608c74ce292b148/position";
+    const char format[] = "{\"source\":\"vehicleDevice\",\"latitude\":%.6f,\"longitude\":%.6f,\"speed\":%.2f,\"timestamp\":%llu}";
 
-    vTaskDelay(pdMS_TO_TICKS(10000));
+    // escribe el mensaje en formato JSON
+    length = snprintf(payload, sizeof(payload), format,
+        event.latitude, event.longitude, event.speed_over_ground, event.gps_timestamp
+    );
+    
+    ESP_LOGI(TAG, "Publishing current position...");
+
+    // publica el mensaje
+    std::span<char> span(payload);
+    return m_mqtt->publish(topic, span.subspan(0, length), 1, 1);
+}
+
+esp_err_t MobileService::publish_pong(events::ping_event_t &event)
+{
+    char payload[32];
+    int length;
+    const char topic[] = "device/1/ping/pong";
+    const char format[] = "{\"timestamp\":%lu}";
+
+    // escribe el mensaje en formato JSON
+    length = snprintf(payload, sizeof(payload), format, event.timestamp);
+    
+    ESP_LOGI(TAG, "Publishing pong...");
+
+    // publica el mensaje
+    std::span<char> span(payload);
+    return m_mqtt->publish(topic, span.subspan(0, length));
+}
+
+esp_err_t MobileService::publish_event(events::device_event_t &event)
+{
+    char payload[62];
+    int length;
+    const char topic[] = "device/1/event";
+    const char format[] = "{\"code\":\"%s\",\"timestamp\":%lu}";
+    const char *event_code;
+
+    switch (event.code)
+    {
+        case event_code_t::DEVICE_RESET:
+            event_code = "deviceReset";
+            break;
+        case event_code_t::STORAGE_FULL:
+            event_code = "storageFull";
+            break;
+        case event_code_t::STORAGE_FAILURE:
+            event_code = "storageFailure";
+            break;
+        case event_code_t::VIDEO_RECORDING_STARTED:
+            event_code = "videoRecordingStarted";
+            break;
+        case event_code_t::VIDEO_RECORDING_STOPPED:
+            event_code = "videoRecordingStopped";
+            break;
+        case event_code_t::CAMERA_FAILURE:
+            event_code = "cameraFailure";
+            break;
+        case event_code_t::IMPACT_DETECTED:
+            event_code = "impactDetected";
+            break;
+        case event_code_t::HARSH_ACCELERATION:
+            event_code = "harshAcceleration";
+            break;
+        case event_code_t::HARSH_BRAKING:
+            event_code = "harshBraking";
+            break;
+        case event_code_t::HARSH_CORNERING:
+            event_code = "harshCornering";
+            break;
+        case event_code_t::GPS_SIGNAL_LOST:
+            event_code = "gpsSignalLost";
+            break;
+        case event_code_t::GPS_SIGNAL_RESTORED:
+            event_code = "gpsSignalRestored";
+            break;
+        case event_code_t::PANIC_BUTTON_PRESSED:
+            event_code = "panicButtonPressed";
+            break;
+        case event_code_t::TAMPERING_DETECTED:
+            event_code = "tamperingDetected";
+            break;
+        case event_code_t::APP_CONNECTED:
+            event_code = "appConnected";
+            break;
+        case event_code_t::APP_DISCONNECTED:
+            event_code = "appDisconnected";
+            break;
+        case event_code_t::DRIVER_IDENTIFIED:
+            event_code = "driverIdentified";
+            break;
+    default:
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // escribe el mensaje en formato JSON
+    length = snprintf(
+        payload, 
+        sizeof(payload), 
+        format, 
+        event_code, 
+        event.timestamp
+    );
+    
+    ESP_LOGI(TAG, "Publishing event '%s'...", event_code);
+
+    // publica el mensaje
+    std::span<char> span(payload);
+    return m_mqtt->publish(topic, span.subspan(0, length), 2);
+}
+
+void MobileService::on_event(void *args, esp_event_base_t base, int32_t id, void *data)
+{
+    auto instance = reinterpret_cast<MobileService *>(args);
+
+    if (id == MODEM_EVENT_MQTT_MESSAGE_RECEIVED) {
+        auto message = reinterpret_cast<mqtt_message_t *>(data);
+
+        ESP_LOGI(
+            TAG, 
+            "Topic: %s | Content: %s",
+            message->topic,
+            message->content
+        );
+
+        ping_event_t event{};
+        event.ping_timestamp = 0;
+        event.timestamp = xTaskGetTickCount();
+        instance->m_queue_set->ping().overwrite(event);
+
+    } else if (id == MODEM_EVENT_GNSS_NAVIGATION_REPORT) {
+        auto info = reinterpret_cast<gnss_nav_info_t *>(data);
+        
+        ESP_LOGI(
+            TAG, 
+            "Coordinates: latitude=%.6f, longitude=%.6f, speed=%.2f km/h", 
+            info->latitude, 
+            info->longitude,
+            info->speed_over_ground
+        );
+
+        // verifica si se recibieron las coordenadas
+        if (info->fix_status) {
+            position_event_t event{};
+            event.latitude = info->latitude;
+            event.longitude = info->longitude;
+            event.speed_over_ground = info->speed_over_ground;
+            event.course_over_ground = info->course_over_ground;
+            event.gps_timestamp = helpers::gps_ts_to_epoch_ts(info->date_time);
+            
+            // registra la posición actual
+            instance->m_queue_set->position().send_to_back(event, 0);
+
+            // verifica si se habia perdido la señal
+            if (instance->m_gps_signal_lost) {
+                instance->m_gps_signal_lost = false;
+
+                // registra un evento de recuperación de señal
+                device_event_t event2{};
+                event2.code = event_code_t::GPS_SIGNAL_RESTORED;
+                instance->m_queue_set->device().send_to_back(event2);
+            }
+        } else {
+            // verifica si no se habia perdido la señal
+            if (!instance->m_gps_signal_lost) {
+                instance->m_gps_signal_lost = true;
+
+                // registra un evento de perdida de señal
+                device_event_t event2{};
+                event2.code = event_code_t::GPS_SIGNAL_LOST;
+                instance->m_queue_set->device().send_to_back(event2);
+            }
+        }
+    }
 }
 
 } // namespace axomotor::services

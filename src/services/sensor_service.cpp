@@ -10,11 +10,13 @@
 namespace axomotor::services {
 
 using namespace axomotor::constants::hw::sensor;
+using namespace axomotor::events;
 
 constexpr static const char *TAG = "sensor_service";
 
-SensorService::SensorService() :
+SensorService::SensorService(events::DeviceEventQueue &queue) :
     ServiceBase{TAG, 4 * 1024, 4},
+    m_queue{queue},
     m_bias_ax{0},
     m_bias_ay{0},
     m_bias_az{0},
@@ -29,7 +31,9 @@ SensorService::SensorService() :
     m_brake_count{0},
     m_curve_count{0},
     m_impact_count{0},
-    m_delay{pdMS_TO_TICKS(1000 / FS)}
+    m_delay{pdMS_TO_TICKS(1000 / FS)},
+    m_last_event{event_code_t::NONE},
+    m_last_event_ts{0}
 { 
     i2c_config_t config{};
     config.mode = I2C_MODE_MASTER;
@@ -112,6 +116,7 @@ void SensorService::loop()
         m_impact_count++;
         if (m_impact_count > IMPACT_CONFIRM_COUNT) {
             ESP_LOGW(TAG, "Impact detected (a=%.6f)", a_total);
+            report(event_code_t::IMPACT_DETECTED);
             m_impact_count = 0;
         }
     } else {
@@ -122,10 +127,12 @@ void SensorService::loop()
     if (a_long < BRAKE_THR) {
         m_brake_count++;
         if (m_brake_count > BRAKE_CONFIRM_COUNT)  {
-            if (jerk < -JERK_THR)
+            if (jerk < -JERK_THR) {
                 ESP_LOGW(TAG, "Harsh braking (a_long=%.6f, jerk=%.6f)", a_long, jerk);
-            else
+                report(event_code_t::HARSH_BRAKING);
+            } else {
                 ESP_LOGW(TAG, "Hard braking (a_long=%.6f)", a_long);
+            }
             
             m_brake_count = 0;
         }
@@ -135,10 +142,12 @@ void SensorService::loop()
     if (a_long > ACCELERATION_THR) {
         m_accel_count++;
         if (m_accel_count > IMPACT_CONFIRM_COUNT) {
-            if (jerk > JERK_THR) 
+            if (jerk > JERK_THR) {
                 ESP_LOGW(TAG, "Harsh acceleration (a_long=%.6f, jerk=%.6f)", a_long, jerk);
-            else
+                report(event_code_t::HARSH_ACCELERATION);
+            } else {
                 ESP_LOGW(TAG, "Hard acceleration (a_long=%.6f)", a_long);
+            }
 
             m_accel_count = 0;
         }
@@ -151,6 +160,7 @@ void SensorService::loop()
         m_curve_count++;
         if (m_curve_count > ACCEL_CONFIRM_COUNT) {
             ESP_LOGW(TAG, "Harsh cornering detected (a_lat=%.6f, yaw_rate=%.6f)", a_lat, yaw_rate);
+            report(event_code_t::HARSH_CORNERING);
             m_curve_count = 0;
         }
     } else {
@@ -232,6 +242,23 @@ void SensorService::calibrate_biases(int samples_num)
         m_bias_ax, m_bias_ay, m_bias_az, m_bias_gz);
 
     ESP_LOGI(TAG, "Calibration completed");
+}
+
+void SensorService::report(events::event_code_t code)
+{
+    TickType_t timestamp = xTaskGetTickCount();
+    bool send_event = (code != m_last_event) || 
+        (timestamp - m_last_event_ts >= pdMS_TO_TICKS(LAST_EVENT_DELAY));
+    
+    if (send_event) {
+        device_event_t event{};
+        event.code = code;
+        event.timestamp = timestamp;
+        
+        m_queue.send_to_back(event, 0);
+        m_last_event = code;
+        m_last_event_ts = timestamp;
+    }
 }
 
 } // namespace axomotor::services
