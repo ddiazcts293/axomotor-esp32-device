@@ -85,6 +85,7 @@ namespace axomotor::lte_modem
         esp_err_t get_sim_status(sim_status_t &status);
         esp_err_t get_imei(std::string &imei);
         esp_err_t get_system_time(std::string &date_time);
+        esp_err_t sync_time();
 
         /* Control de red */
 

@@ -269,11 +269,22 @@ namespace axomotor::lte_modem::helpers
      */
     void remove_after(std::string &str, const char *seq, bool keep_seq = false);
 
-    /// @brief Convierte una marca de tiempo de GPS a Unix Epoch.
-    /// @param gps_timestamp Marca de tiempo GPS.
-    /// @return Marca de tiempo Epoch Unix.
-    time_t gps_ts_to_epoch_ts(uint64_t gps_timestamp);
+    /**
+     * @brief Convierte una marca de tiempo de GPS a Unix Epoch.
+     * 
+     * @param gps_timestamp Marca de tiempo GPS.
+     * @return time_t Marca de tiempo Epoch Unix.
+     */
+    time_t parse_to_epoch(uint64_t gps_timestamp);
     
+    /**
+     * @brief Convierte una cadena de fecha y hora a Unix Epoch.
+     * 
+     * @param payload Cadena con la fecha formateada yy/MM/dd,hh:mm:ss±zz.
+     * @return time_t Marca de tiempo Epoch Unix.
+     */
+    time_t parse_to_epoch(std::string &payload);
+
     void parse_gnss_info(std::string &payload, gnss_nav_info_t &info);
 
 } // namespace axomotor::lte_modem

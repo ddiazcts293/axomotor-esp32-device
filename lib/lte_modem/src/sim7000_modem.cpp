@@ -295,6 +295,40 @@ esp_err_t SIM7000_Modem::get_system_time(std::string &date_time)
     return err;
 }
 
+esp_err_t SIM7000_Modem::sync_time()
+{
+    std::string date_time;
+    esp_err_t err = get_system_time(date_time);
+
+    if (err == ESP_OK) {
+        time_t epoch = helpers::parse_to_epoch(date_time);
+        if (epoch != 0) {
+            struct timeval val{};
+            val.tv_sec = epoch;
+
+            // establece la hora del sistema
+            if (settimeofday(&val, NULL) == 0) {
+                epoch = 0;
+                time(&epoch);
+                
+                ESP_LOGI(
+                    TAG, 
+                    "The system time is set | current timestamp: %lld",
+                    epoch
+                );
+            } else {
+                ESP_LOGW(TAG, "Failed to set system time (%d)", errno);
+                err = ESP_FAIL;
+            }
+        } else {
+            ESP_LOGW(TAG, "Unrecognized datetime format");
+            err = ESP_FAIL;
+        }
+    }
+
+    return err;
+}
+
 esp_err_t SIM7000_Modem::get_signal_strength(int8_t &value, signal_strength_t *strength)
 {
     // espera hasta que el modulo esté disponible
@@ -396,7 +430,7 @@ esp_err_t SIM7000_Modem::get_connection_status(connection_status_t &status)
     // obtiene el estado de conexión
     result = execute_internal_cmd(at_cmd_t::CIPSTATUS, 0, false, true);
     if (result == ESP_OK) {
-        ESP_LOG_BUFFER_HEX(TAG, response.c_str(), response.length());
+        //ESP_LOG_BUFFER_HEX(TAG, response.c_str(), response.length());
 
         // verifica si la respuesta comienza con OK
         bool is_valid = response.starts_with(CRLF "OK");
@@ -580,7 +614,6 @@ esp_err_t SIM7000_Modem::config_gprs()
 
         index = response.find_first_of(cid_str) + cid_str.length();
         value = helpers::to_number<uint8_t>(response, index, 1);
-        ESP_LOGI(TAG, "%s %u %u", response.substr(index, 1).c_str(), value, response.length());
 
         if (value == 1) {
             ESP_LOGI(TAG, "PDP Context is active");
@@ -661,7 +694,10 @@ esp_err_t SIM7000_Modem::config_tcp_tk()
     if (err == ESP_OK) {
         // verifica si el APN actualmente establecido es diferente al 
         // provisto por la aplicación
-        if (params != m_apn.apn) {
+        if (params != m_apn.apn || 
+            conn_status == connection_status_t::PDP_DEACT || 
+            conn_status == connection_status_t::IP_INITIAL
+        ) {
             ESP_LOGI(TAG, "TCP APP Toolkit APN is not set");
 
             // verifica si el estado de conexión no está inicializado
@@ -1076,7 +1112,7 @@ void SIM7000_Modem::loop()
         {
             case UART_DATA:
                 if (event.size != 0) {
-                    ESP_LOGI(TAG, "Received data from UART (%u bytes)", event.size);
+                    ESP_LOGD(TAG, "Received data from UART (%u bytes)", event.size);
                     receive_uart_data(event.size);
                 }
                 break;

@@ -126,7 +126,7 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
     }
 
     // escribe un caracter de retorno de carro para indicar ejecutar el comando
-    ESP_LOGI(TAG, "Executing '%s'...", cmd_line.c_str());
+    ESP_LOGD(TAG, "Executing '%s'...", cmd_line.c_str());
     cmd_line.append(CR);
     on_cmd_write(cmd_line.data(), cmd_line.length());
 
@@ -195,7 +195,7 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
         switch (result_info->result) {
             case at_cmd_result_t::OK:
                 if (result_info->response.length() > 0) {
-                    ESP_LOGI(
+                    ESP_LOGD(
                         TAG,
                         "Command execution successful (%u bytes received)",
                         result_info->response.length()
@@ -207,7 +207,7 @@ esp_err_t SIM7000_BasicModem::execute_cmd(
                         result_info->response.length()
                     ); */
                 } else {
-                    ESP_LOGI(TAG, "Command execution successful");
+                    ESP_LOGD(TAG, "Command execution successful");
                 }
                 err = ESP_OK;
                 break;

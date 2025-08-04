@@ -79,7 +79,7 @@ namespace axomotor::lte_modem::helpers
         }
     }
 
-    time_t gps_ts_to_epoch_ts(uint64_t gps_timestamp)
+    time_t parse_to_epoch(uint64_t gps_timestamp)
     {
         if (gps_timestamp == 0) return 0;
         time_t epoch;
@@ -144,6 +144,42 @@ namespace axomotor::lte_modem::helpers
         // obtiene la cantidad de satelites de GPS en vista
         extract_token(payload, 15, ",", aux, true);
         info.gps_satellites = to_number<uint8_t>(aux);//fields[15]);
+    }
+
+    time_t parse_to_epoch(std::string &payload)
+    {
+        if (payload.empty()) return 0;
+        int diff;
+        time_t epoch;
+        struct tm c_dt;
+        std::string aux;
+
+        //  25/08/04,03:04:29-28
+        extract_token(payload, 0, "/", aux, true);  // 25
+        c_dt.tm_year = 100 + to_number<int>(aux); // 125
+        extract_token(payload, 1, "/", aux, true);  // 08
+        c_dt.tm_mon = -1 + to_number<int>(aux);   // 7
+        extract_token(payload, 2, "/,", aux, true); // 04
+        c_dt.tm_mday = to_number<int>(aux);       // 4
+        
+        remove_before(payload, ",", false);
+        // 03:04:29-28
+        extract_token(payload, 0, ":", aux, true);  // 03
+        c_dt.tm_hour = to_number<int>(aux);       // 3
+        extract_token(payload, 1, ":", aux, true);  // 04
+        c_dt.tm_min = to_number<int>(aux);        // 4
+        extract_token(payload, 0, ":-", aux, true); // 29
+        c_dt.tm_sec = to_number<int>(aux);        // 29
+        c_dt.tm_isdst = 0;
+        
+        // obtiene la diferencia de horas
+        aux = payload.substr(8);
+        diff = to_number<int>(aux);
+        
+        c_dt.tm_hour -= (diff / 4);
+        
+        epoch = mktime(&c_dt);
+        return epoch;
     }
 
 } // namespace axomotor::lte_modem
