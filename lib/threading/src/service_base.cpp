@@ -12,7 +12,6 @@ constexpr static const char *TAG = "service_base";
 
 ServiceBase::ServiceBase(const char *name, size_t stack_size, uint32_t priority, int core) :
     m_task_handle(nullptr)
-    //loop_delay(DEFAULT_TASK_DELAY)
 {
     m_pthread_config = esp_pthread_get_default_config();
     m_pthread_config.thread_name = name,
@@ -83,7 +82,7 @@ esp_err_t ServiceBase::start(bool wait_for_setup)
     }
     
     if (wait_for_setup) {
-        ESP_LOGI(TAG, "Waiting for setup completed");
+        ESP_LOGD(TAG, "Waiting for setup completed");
 
         flags = m_event_group.wait_for_flags(
             SERVICE_SETUP_COMPLETED_BIT | SERVICE_SETUP_FAILED_BIT);
@@ -176,7 +175,7 @@ void ServiceBase::run()
 
         // finaliza el servicio
         finish();
-        ESP_LOGI(TAG, "Service '%s' has been stopped", name);
+        ESP_LOGD(TAG, "Service '%s' has been stopped", name);
     } else {
         ESP_LOGE(
             TAG, 
