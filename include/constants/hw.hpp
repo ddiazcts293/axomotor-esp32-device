@@ -1,5 +1,8 @@
+
+
 #pragma once
 
+#include <freertos/FreeRTOS.h>
 #include <hal/gpio_types.h>
 #include <hal/uart_types.h>
 #include <hal/ledc_types.h>
@@ -58,5 +61,16 @@ constexpr const i2c_port_t I2C_PORT = I2C_NUM_0;
 constexpr const int I2C_FREQ_HZ = 100000UL;
 
 } // namespace sensor
+
+namespace panic_btn {
+
+constexpr const gpio_num_t PIN_BUTTON = GPIO_NUM_14;
+constexpr const gpio_num_t PIN_LED_BUTTON = GPIO_NUM_46;
+constexpr const TickType_t BUTTON_DEBOUNCE_DELAY = pdMS_TO_TICKS(100);
+constexpr const TickType_t BUTTON_MAX_DELAY_BETWEEN = pdMS_TO_TICKS(750);
+constexpr const ledc_timer_t LEDC_TIMER = LEDC_TIMER_1;
+constexpr const ledc_channel_t LEDC_CHANNEL = LEDC_CHANNEL_1;
+
+}
 
 } // namespace axomotor::constants::hw

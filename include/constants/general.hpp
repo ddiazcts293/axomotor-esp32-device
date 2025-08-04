@@ -18,4 +18,6 @@ constexpr const size_t NETWORK_EVENTS_QUEUE_LENGTH = 1;
 
 constexpr const int POSITION_REPORT_INTERVAL = 20;
 
+constexpr const int PANIC_BTN_EVENTS_TO_CONFIRM = 3;
+
 }

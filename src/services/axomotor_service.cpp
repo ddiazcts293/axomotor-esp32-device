@@ -86,6 +86,11 @@ void AxoMotorService::init()
     auto mobile_service =  std::make_shared<MobileService>();
     auto sensor_service = std::make_shared<SensorService>();
     auto image_service = std::make_shared<ImageService>();
+    auto panic_service = std::make_shared<PanicBtnService>();
+
+    // iniciar el servicio del botón de pánico
+    ESP_LOGI(TAG, "Starting Panic Button Service...");
+    panic_service->start();
 
     // iniciar el servicio móvil
     ESP_LOGI(TAG, "Starting Mobile Service...");
@@ -116,7 +121,7 @@ void AxoMotorService::init()
         queue_set.device.send_to_back(events::event_code_t::STORAGE_FAILURE);
     }
     
-    uint32_t flags = event_group.wait_for_flags(MOBILE_SERVICE_STARTED_BIT, pdMS_TO_TICKS(15000));
+    uint32_t flags = event_group.wait_for_flags(MOBILE_SERVICE_STARTED_BIT, pdMS_TO_TICKS(35000));
     if ((flags & MOBILE_SERVICE_STARTED_BIT) == 0) {
         ESP_LOGE(TAG, "Failed to start Mobile Service");
         restart();
