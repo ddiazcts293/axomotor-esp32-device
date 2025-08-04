@@ -1,4 +1,5 @@
 #include "services/sensor_service.hpp"
+#include "services/axomotor_service.hpp"
 #include "constants/hw.hpp"
 #include "constants/sensor.hpp"
 
@@ -14,9 +15,8 @@ using namespace axomotor::events;
 
 constexpr static const char *TAG = "sensor_service";
 
-SensorService::SensorService(events::DeviceEventQueue &queue) :
-    ServiceBase{TAG, 4 * 1024, 4},
-    m_queue{queue},
+SensorService::SensorService() :
+    ServiceBase{TAG, 4 * 1024, 4, 1},
     m_bias_ax{0},
     m_bias_ay{0},
     m_bias_az{0},
@@ -66,7 +66,6 @@ esp_err_t SensorService::setup()
 
         // calibra el sensor tomando 500 muestras
         calibrate_biases(500);
-
     } else {
         ESP_LOGE(TAG, "Failed to initialize MPU6050");
     }
@@ -194,7 +193,7 @@ esp_err_t SensorService::configure_sensor()
             }
         } 
         
-        ESP_LOGI(TAG, "Retrying to configure MPU6050...");
+        ESP_LOGW(TAG, "Attempting to configure MPU6050...");
         vTaskDelay(pdMS_TO_TICKS(250));
     } while (attempt_num != 0);
     
@@ -246,16 +245,15 @@ void SensorService::calibrate_biases(int samples_num)
 
 void SensorService::report(events::event_code_t code)
 {
+    // verifica si el sistema no está listo
+    if (!AxoMotor::event_group.is_system_ready()) return;
+
     TickType_t timestamp = xTaskGetTickCount();
     bool send_event = (code != m_last_event) || 
         (timestamp - m_last_event_ts >= pdMS_TO_TICKS(LAST_EVENT_DELAY));
     
     if (send_event) {
-        device_event_t event{};
-        event.code = code;
-        event.timestamp = timestamp;
-        
-        m_queue.send_to_back(event, 0);
+        AxoMotor::queue_set.device.send_to_back(code, 0);
         m_last_event = code;
         m_last_event_ts = timestamp;
     }

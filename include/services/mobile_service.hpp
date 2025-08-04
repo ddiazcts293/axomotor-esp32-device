@@ -15,14 +15,14 @@ namespace axomotor::services {
 class MobileService : public threading::ServiceBase
 {
 public:
-    MobileService(std::shared_ptr<events::EventQueueSet> queue_set);
+    MobileService();
 
 private:
     std::shared_ptr<lte_modem::SIM7000_Modem> m_modem;
     std::shared_ptr<lte_modem::SIM7000_GNSS> m_gnss;
     std::shared_ptr<lte_modem::SIM7000_MQTT> m_mqtt;
-    std::shared_ptr<events::EventQueueSet> m_queue_set;
 
+    bool m_gps_enabled;
     bool m_gps_signal_lost;
 
     esp_err_t setup() override;

@@ -4,10 +4,10 @@
 
 namespace axomotor::services {
 
-class CameraService : public threading::ServiceBase
+class ImageService : public threading::ServiceBase
 {
 public:
-    CameraService();
+    ImageService();
 
 private:
     esp_err_t setup() override;

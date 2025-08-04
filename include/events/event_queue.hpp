@@ -1,12 +1,15 @@
 #pragma once
 
 #include <memory>
+#include <ctime>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include "definitions.hpp"
 
 namespace axomotor::events {
+
+time_t get_timestamp();
 
 template <typename T>
 class EventQueue
@@ -57,7 +60,7 @@ public:
         return m_size;
     }
 
-    void reset()
+    void reset() const
     {
         xQueueReset(m_handle);
     }
@@ -67,7 +70,7 @@ public:
         return xQueuePeek(m_handle, &item, ticks_to_wait);
     }
 
-    bool overwrite(const T &item)
+    bool overwrite(const T &item) const
     {
         if (m_size != 1)
             return send_to_front(item, 0);
@@ -84,7 +87,16 @@ private:
     QueueHandle_t m_handle;
 };
 
-using DeviceEventQueue = EventQueue<device_event_t>;
+class DeviceEventQueue : public EventQueue<device_event_t>
+{
+friend class EventQueueSet;
+
+public:
+    DeviceEventQueue(size_t length);
+    bool send_to_back(const event_code_t code, TickType_t ticks_to_wait = portMAX_DELAY) const;
+    bool send_to_front(const event_code_t code, TickType_t ticks_to_wait = portMAX_DELAY) const;
+};
+
 using PositionEventQueue = EventQueue<position_event_t>;
 using PingEventQueue = EventQueue<ping_event_t>;
 
@@ -93,15 +105,12 @@ class EventQueueSet
 public:
     EventQueueSet();
     
-    event_type_t wait_for_event(TickType_t ticks_to_wait = portMAX_DELAY);
-    DeviceEventQueue &device();
-    PositionEventQueue &position();
-    PingEventQueue &ping();
+    event_type_t wait_for_event(TickType_t ticks_to_wait = portMAX_DELAY) const;
     
+    const DeviceEventQueue device;
+    const PositionEventQueue position;
+    const PingEventQueue ping;
 private:
-    DeviceEventQueue m_device_queue;
-    PositionEventQueue m_position_queue;
-    PingEventQueue m_ping_queue;
     QueueSetHandle_t m_handle;
 };
 

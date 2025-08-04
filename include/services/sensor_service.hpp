@@ -12,10 +12,9 @@ namespace axomotor::services {
 class SensorService : public threading::ServiceBase
 {
 public:    
-    SensorService(events::DeviceEventQueue &queue);
+    SensorService();
 
 private:
-    events::DeviceEventQueue &m_queue;
     mpu6050_handle_t m_mpu6050;
     float m_bias_ax;
     float m_bias_ay;

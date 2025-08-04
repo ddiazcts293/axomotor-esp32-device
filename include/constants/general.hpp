@@ -2,7 +2,12 @@
 
 #include <freertos/FreeRTOS.h>
 
+#define SD_MOUNT_POINT "/sdcard"
+
 namespace axomotor::constants::general {
+
+constexpr const size_t MAX_JSON_LENGTH = 1024;
+constexpr const size_t TRIP_ID_LENGTH = 24;
 
 constexpr const size_t POSITION_EVENTS_QUEUE_LENGTH = 30;
 constexpr const size_t DEVICE_EVENTS_QUEUE_LENGTH = 10;

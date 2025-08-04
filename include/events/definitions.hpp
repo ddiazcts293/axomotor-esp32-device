@@ -1,6 +1,7 @@
 #pragma once
 
 #include <freertos/FreeRTOS.h>
+#include <ctime>
 
 namespace axomotor::events
 {
@@ -10,6 +11,7 @@ namespace axomotor::events
         DEVICE_RESET,               // Reinicio del dispositivo
         STORAGE_FULL,               // Memoria llena
         STORAGE_FAILURE,            // Fallo de almacenamiento
+        SENSOR_FAILURE,             // Fallo de sensores
         VIDEO_RECORDING_STARTED,    // Inicio de grabación de video
         VIDEO_RECORDING_STOPPED,    // Fin de grabación
         CAMERA_FAILURE,             // Fallo de cámara
@@ -23,7 +25,6 @@ namespace axomotor::events
         TAMPERING_DETECTED,         // Manipulación del dispositivo
         APP_CONNECTED,              // Aplicación conectada
         APP_DISCONNECTED,           // Aplicación desconectada
-        DRIVER_IDENTIFIED,          // Conductor identificado
     };
 
     enum class event_type_t
@@ -37,13 +38,13 @@ namespace axomotor::events
 
     struct device_event_t
     {
-        TickType_t timestamp;
+        time_t timestamp;
         event_code_t code;
     };
     
     struct position_event_t
     {
-        uint64_t gps_timestamp;
+        time_t timestamp;
         float latitude;
         float longitude;
         float speed_over_ground;
@@ -53,7 +54,7 @@ namespace axomotor::events
     struct ping_event_t
     {
         uint64_t ping_timestamp;
-        TickType_t timestamp;
+        time_t timestamp;
     };
     
 } // namespace axomotor::event

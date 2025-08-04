@@ -1,49 +1,8 @@
-#include <memory>
+#include "services/axomotor_service.hpp"
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <freertos/queue.h>
-#include <esp_log.h>
-#include <esp_memory_utils.h>
-
-#include "services/image_service.hpp"
-#include "services/mobile_service.hpp"
-#include "services/storage_service.hpp"
-#include "services/sensor_service.hpp"
-#include "events/event_queue.hpp"
-
-using namespace std;
 using namespace axomotor::services;
-using namespace axomotor::events;
-
-static const char *TAG = "app_main";
 
 extern "C" void app_main() 
 {
-    vTaskDelay(pdMS_TO_TICKS(5000));
-    /* auto storage_service = make_shared<StorageService>();
-    esp_err_t err = storage_service->init();
-    if (err == ESP_OK) {
-        storage_service->enable_log_to_file();
-    } */
-    
-    //auto image_service = make_shared<CameraService>();
-    auto event_queue = make_shared<EventQueueSet>();
-    auto mobile_service = make_shared<MobileService>(event_queue);
-    auto sensor_service = make_shared<SensorService>(event_queue->device());
-    //image_service->start();
-    mobile_service->start();
-    sensor_service->start();
-
-    while (true)
-    {
-        uint32_t free_heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-        uint32_t max_heap_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-        uint32_t heap_total_size = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
-
-        ESP_LOGI(TAG, "HEAP: free=%lu, max_block=%lu, total=%lu", 
-            free_heap, max_heap_block, heap_total_size);
-        
-        vTaskDelay(pdMS_TO_TICKS(10000));
-    }
+    AxoMotorService::init();
 }
