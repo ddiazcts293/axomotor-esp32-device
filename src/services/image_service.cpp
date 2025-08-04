@@ -2,17 +2,23 @@
 #include "services/axomotor_service.hpp"
 #include "constants/hw.hpp"
 
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
+
 #include <esp_log.h>
 #include <esp_camera.h>
 
 namespace axomotor::services {
 
+using namespace axomotor::events;
 using namespace axomotor::constants::hw::camera;
 
 constexpr static const char *TAG = "image_service";
 
 ImageService::ImageService() : 
-    ServiceBase{TAG, 4 * 1024, 10}
+    ServiceBase{TAG, 4 * 1024, 10},
+    m_is_active{false}
 { }
 
 esp_err_t ImageService::setup()
@@ -76,16 +82,93 @@ esp_err_t ImageService::setup()
 void ImageService::loop()
 {
     // espera hasta que haya un viaje disponible
-    AxoMotor::event_group.wait_until_system_is_ready();
+    bool is_ready = AxoMotor::event_group.wait_until_system_is_ready(pdMS_TO_TICKS(1000));
+    
+    if (is_ready && !m_is_active) {
+        m_is_active = true;
+        m_current_dir = SD_MOUNT_POINT "/";
+        m_current_dir.append(std::to_string(AxoMotor::get_trip_count()));
+        m_current_dir.append("/");
 
-    ESP_LOGI(TAG, "Taking picture...");
-    camera_fb_t *pic = esp_camera_fb_get();
+        ensure_dir_exists();
+        AxoMotor::queue_set.device.send_to_back(event_code_t::VIDEO_RECORDING_STARTED);
+    } else if (!is_ready && m_is_active) {
+        m_is_active = false;
+        AxoMotor::queue_set.device.send_to_back(event_code_t::VIDEO_RECORDING_STOPPED);
+    }
 
-    // use pic->buf to access the image
-    ESP_LOGI(TAG, "Picture taken! Its size was: %zu bytes", pic->len);
-    esp_camera_fb_return(pic);
+    if (is_ready) {
+        ESP_LOGI(TAG, "Taking picture...");
+        camera_fb_t *pic = esp_camera_fb_get();
+        save_image(pic);
+        esp_camera_fb_return(pic);
 
-    vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
+
+bool ImageService::ensure_dir_exists()
+{
+    struct stat st;
+
+    if (stat(m_current_dir.c_str(), &st) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+            return true;
+        } else {
+            ESP_LOGW(TAG, "'%s' is not a directory", m_current_dir.c_str());
+            return false;
+        }
+    }
+
+    if (mkdir(m_current_dir.c_str(), 0775) == 0) {
+        return true;
+    } else {
+        ESP_LOGE(
+            TAG, 
+            "Could not create directory: %s (errno=%d)", 
+            m_current_dir.c_str(), 
+            errno
+        );
+        
+        return false;
+    }
+}
+
+bool ImageService::save_image(camera_fb_t *fb)
+{
+    if (!fb || fb->len == 0) {
+        ESP_LOGW(TAG, "Corrupted image");
+        return false;
+    } 
+
+    char path[32];
+    snprintf(
+        path, 
+        sizeof(path), 
+        "%s%llX.jpg", 
+        m_current_dir.c_str(), 
+        events::get_timestamp()
+    );
+
+    ESP_LOGI(TAG, "Save image to '%s'", path);
+
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for writing (errno=%d)", errno);
+        return false;
+    }
+
+    size_t wlen = fwrite(fb->buf, sizeof(uint8_t), fb->len, f);
+    fclose(f);
+
+    if (wlen == fb->len) {
+        ESP_LOGI(TAG, "Image saved successfully (%u bytes)", wlen);
+    } else {
+        ESP_LOGI(TAG, "Failed to save image (%u/%u bytes written)", wlen, fb->len);
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace axomotor::services

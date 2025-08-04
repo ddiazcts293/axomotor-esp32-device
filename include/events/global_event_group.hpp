@@ -14,9 +14,10 @@ namespace axomotor::events
     class GlobalEventGroup : public threading::EventGroup
     {
     public:
-        void wait_until_system_is_ready(TickType_t ticks_to_wait = portMAX_DELAY) const
+        bool wait_until_system_is_ready(TickType_t ticks_to_wait = portMAX_DELAY) const
         {
-            wait_for_flags(IS_READY_FLAGS, false, true, ticks_to_wait);
+            return wait_for_flags(IS_READY_FLAGS, false, true, ticks_to_wait) ==
+                IS_READY_FLAGS;
         }
 
         bool is_trip_active() const

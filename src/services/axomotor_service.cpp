@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <sys/unistd.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 #include <esp_log.h>
 #include <esp_wifi.h>
@@ -47,8 +48,9 @@ const events::EventQueueSet AxoMotorService::queue_set = events::EventQueueSet()
 const events::GlobalEventGroup AxoMotorService::event_group = events::GlobalEventGroup();
 
 char AxoMotorService::s_current_trip_id[] = "";
+char *AxoMotorService::s_buffer = nullptr;
 bool AxoMotorService::s_is_initialized = false;
-uint32_t AxoMotorService::s_reset_count = 0;
+uint32_t AxoMotorService::s_trip_count = 0;
 vprintf_like_t AxoMotorService::s_default_writer = NULL;
 httpd_handle_t AxoMotorService::s_httpd_handle = nullptr;
 
@@ -57,6 +59,7 @@ httpd_handle_t AxoMotorService::s_httpd_handle = nullptr;
 void AxoMotorService::init()
 {
     ESP_LOGI(TAG, "Initialization: Stage 1");
+    assert(s_buffer = new char[constants::general::MAX_JSON_LENGTH]);
 
     // limita el nivel de registro de wifi a solo errores
     esp_log_level_set("wifi", ESP_LOG_ERROR);
@@ -113,7 +116,7 @@ void AxoMotorService::init()
         queue_set.device.send_to_back(events::event_code_t::STORAGE_FAILURE);
     }
     
-    uint32_t flags = event_group.wait_for_flags(MOBILE_SERVICE_STARTED_BIT, pdMS_TO_TICKS(10000));
+    uint32_t flags = event_group.wait_for_flags(MOBILE_SERVICE_STARTED_BIT, pdMS_TO_TICKS(15000));
     if ((flags & MOBILE_SERVICE_STARTED_BIT) == 0) {
         ESP_LOGE(TAG, "Failed to start Mobile Service");
         restart();
@@ -153,13 +156,14 @@ void AxoMotorService::init()
     }
 }
 
-std::string AxoMotorService::get_current_trip_id()
+const char *AxoMotorService::get_current_trip_id()
 {
-    if (strlen(s_current_trip_id) == 0) {
-        return std::string();
-    }
+    return s_current_trip_id;
+}
 
-    return std::string(s_current_trip_id);
+uint32_t AxoMotorService::get_trip_count()
+{
+    return s_trip_count;
 }
 
 void AxoMotorService::init_wifi()
@@ -226,7 +230,7 @@ void AxoMotorService::init_httpd()
 
     /* uri para iniciar viaje */
     static const httpd_uri_t start_trip_uri = {
-        .uri = "/startTrip",
+        .uri = "/start",
         .method = HTTP_PUT,
         .handler = on_start_trip_req,
         .user_ctx = NULL
@@ -234,7 +238,7 @@ void AxoMotorService::init_httpd()
 
     /* uri para detener viaje */
     static const httpd_uri_t stop_trip_uri = {
-        .uri = "/stopTrip",
+        .uri = "/stop",
         .method = HTTP_PUT,
         .handler = on_stop_trip_req,
         .user_ctx = NULL
@@ -242,7 +246,7 @@ void AxoMotorService::init_httpd()
 
     /* uri para obtener lista de imagenes */
     static const httpd_uri_t list_images_uri = {
-        .uri = "/listImages",
+        .uri = "/list",
         .method = HTTP_GET,
         .handler = on_list_images_req,
         .user_ctx = NULL
@@ -250,7 +254,7 @@ void AxoMotorService::init_httpd()
 
     /* uri para obtener imagen */
     static const httpd_uri_t get_image_uri = {
-        .uri = "/getImage",
+        .uri = "/image/*",
         .method = HTTP_GET,
         .handler = on_get_image_req,
         .user_ctx = NULL
@@ -259,6 +263,7 @@ void AxoMotorService::init_httpd()
     // inicia y configura el servidor
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
+    config.stack_size = constants::general::HTTPD_STACK_SIZE;
     ESP_ERROR_CHECK(httpd_start(&s_httpd_handle, &config));
 
     httpd_register_uri_handler(s_httpd_handle, &index_uri);
@@ -332,6 +337,7 @@ esp_err_t AxoMotorService::read_trip_id()
 
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "Current trip_id: %s", s_current_trip_id);
+        nvs_get_u32(handle, "count", &s_trip_count);
     } else if (err == ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGI(TAG, "No trip_id value is set");
     } else {
@@ -358,6 +364,15 @@ esp_err_t AxoMotorService::write_trip_id()
     if (err == ESP_OK) {
         // escribe la cadena
         err = nvs_set_str(handle, "trip_id", s_current_trip_id);
+    }
+
+    if (err == ESP_OK) {
+        err = nvs_get_u32(handle, "count", &s_trip_count);
+        s_trip_count++;
+    }
+    
+    if (err == ESP_OK) {
+        err = nvs_set_u32(handle, "count", s_trip_count);
     }
 
     if (err == ESP_OK) {
@@ -417,8 +432,6 @@ esp_err_t AxoMotorService::delete_trip_id()
 
 esp_err_t AxoMotorService::send_response(httpd_req_t *req, bool success, const char *message) 
 {
-    // crea un buffer para almacenar el archivo json
-    char output[constants::general::MAX_JSON_LENGTH];
     // crea un objeto json para colocar valores
     JsonDocument doc;
     // longitud del archivo json a enviar
@@ -427,6 +440,7 @@ esp_err_t AxoMotorService::send_response(httpd_req_t *req, bool success, const c
     
     // establece el resultado de la operación
     doc["success"] = success;
+    doc["timestamp"] = events::get_timestamp();
     // verifica si el resultado de la operación no fue exitoso
     if (!success && message != NULL) {
         // establece el mensaje de error
@@ -434,16 +448,31 @@ esp_err_t AxoMotorService::send_response(httpd_req_t *req, bool success, const c
     }
 
     // convierte el objeto json a texto
-    json_length = serializeJson(doc, output);
+    json_length = serializeJson(doc, s_buffer, constants::general::MAX_JSON_LENGTH);
     
     // establece el tipo de respuesta
     err = httpd_resp_set_type(req, "application/json");
     if (err == ESP_OK) {
         // envía el json
-        err = httpd_resp_send(req, output, json_length);
+        err = httpd_resp_send(req, s_buffer, json_length);
     }
 
     return err;
+}
+
+int64_t AxoMotorService::get_query_param_i64(httpd_req_t *req, const char *key, int64_t def)
+{
+    char param[32];
+    
+    if (httpd_req_get_url_query_len(req) == 0) return def;
+    if (httpd_req_get_url_query_str(req, param, sizeof(param)) != ESP_OK) return def;
+
+    char val_str[32];
+    if (httpd_query_key_value(param, key, val_str, sizeof(val_str)) == ESP_OK) {
+        return atoll(val_str);
+    }
+
+    return def;
 }
 
 void AxoMotorService::enable_log_to_file()
@@ -521,12 +550,13 @@ esp_err_t AxoMotorService::on_stop_trip_req(httpd_req_t *req)
     char trip_id[sizeof(s_current_trip_id)];
     esp_err_t err;
     
-    // verifica si no hay un viaje activo
-    if (!event_group.is_trip_active()) {
+    // verifica si hay un viaje activo
+    if (event_group.is_trip_active()) {
         // obtiene la cadena de consulta
         err = httpd_req_get_url_query_str(req, query_str, sizeof(query_str));
         // verifica si se encontró una consulta
         if (err == ESP_OK) {
+            
             // extrae el identificador de viaje
             err = httpd_query_key_value(
                 query_str, 
@@ -538,8 +568,8 @@ esp_err_t AxoMotorService::on_stop_trip_req(httpd_req_t *req)
 
         // verifica si se pudo extraer el identificador de viaje y si este coincide con
         // el establecido
-        if (err == ESP_OK && strncmp(trip_id, s_current_trip_id, sizeof(trip_id)) == 0) {
-            // borra el identificador actual
+        if (err == ESP_OK && strncmp(trip_id, s_current_trip_id, constants::general::TRIP_ID_LENGTH) == 0) {
+            // borra el identificador actual            
             delete_trip_id();
             err = send_response(req, true, NULL);
         } else {
@@ -554,14 +584,149 @@ esp_err_t AxoMotorService::on_stop_trip_req(httpd_req_t *req)
 
 esp_err_t AxoMotorService::on_list_images_req(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "List images");
-    return httpd_resp_sendstr(req, "List images");
+    ESP_LOGI(TAG, "On list images request handler");
+
+    time_t from = get_query_param_i64(req, "from", 0);
+    time_t to = get_query_param_i64(req, "to", 0x7FFFFFFF);
+    uint64_t offset = get_query_param_i64(req, "offset", 0);
+    uint64_t limit = get_query_param_i64(req, "limit", 10);
+    char dirpath[16];
+
+    // establece la ruta del directorio
+    snprintf(
+        dirpath, 
+        sizeof(dirpath), 
+        SD_MOUNT_POINT "/%lu", 
+        get_trip_count()
+    );
+    
+    // abre el directorio
+    DIR *dir = opendir(dirpath);
+    if (!dir) {
+        ESP_LOGE(TAG, "Could not open directory: '%s'", dirpath);
+        return send_response(req, false, "Could not open directory");
+    }
+
+    JsonDocument doc;
+    JsonArray files = doc.to<JsonArray>();
+    
+    char filepath[272];
+    struct dirent *entry;
+    struct stat st;
+    int match_count = 0;
+
+    // bucle que recorre todas las entradas en un directorio
+    while ((entry = readdir(dir)) != NULL) 
+    {
+        // verifica si la entrada corresponde a un directorio
+        if (entry->d_type != DT_REG) continue;
+
+        // establece la ruta completa del archivo
+        snprintf(filepath, sizeof(filepath), "%s/%s", dirpath, entry->d_name);
+        // verifica si el archivo existe
+        if (stat(filepath, &st) != 0) continue;
+
+        // obtiene la fecha de creación del archivo
+        time_t file_time = st.st_mtime;
+        // verifica si la fecha se encuentra dentro del periodo indicado
+        if (file_time >= from && file_time <= to) {
+            // verifica si el archivo se encuentra dentro de los límites de paginación
+            if (match_count >= offset && match_count < (offset + limit)) {
+                // añade un objeto al arreglo de respuesta
+                JsonObject f = files.add<JsonObject>();
+                f["name"] = entry->d_name;
+                f["size"] = (int)st.st_size;
+                f["created"] = (long)file_time;  // Puedes dejarlo como timestamp Unix
+            }
+
+            match_count++;
+        }
+    }
+
+    // cierra el directorio
+    closedir(dir);
+
+    size_t len = serializeJson(doc, s_buffer, constants::general::MAX_JSON_LENGTH);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s_buffer, len);
+    return ESP_OK;
 }
 
 esp_err_t AxoMotorService::on_get_image_req(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Get image");
-    return httpd_resp_sendstr(req, "Get image");
+
+    char filepath[272];
+    char filename[128];
+
+    // Extraer el nombre del archivo desde la URI
+    const char *uri = req->uri;
+    const char *base = "/image/";
+    
+    // compara la base de la uri con la predeterminada
+    if (strncmp(uri, base, strlen(base)) != 0) {
+        send_response(req, false, "Invalid URI format");
+        return ESP_FAIL;
+    }
+    
+    // obtiene un puntero al nombre del archivo
+    const char *requested_file = uri + strlen(base);
+    // verifica si se especificó un nombre de archivo demasiado largo
+    if (strlen(requested_file) >= sizeof(filename)) {
+        send_response(req, false, "File name too long");
+        return ESP_FAIL;
+    }
+
+    // establece la ruta completa del archivo
+    snprintf(
+        filepath, 
+        sizeof(filepath), 
+        SD_MOUNT_POINT "/%lu/%s", 
+        get_trip_count(),
+        requested_file
+    );
+
+    // establece el nombre del archivo
+    snprintf(filename, sizeof(filename), "%s", requested_file);
+
+    // verifica si el archivo existe
+    struct stat st;
+    if (stat(filepath, &st) != 0) {
+        ESP_LOGW(TAG, "File not found: '%s'", filepath);
+        send_response(req, false, "File not found");
+        return ESP_FAIL;
+    }
+
+    // abre el archivo
+    FILE *f = fopen(filepath, "rb");
+    if (!f) {
+        ESP_LOGE(TAG, "Error opening file: '%s'", filepath);
+        send_response(req, false, "Cannot open file");
+        return ESP_FAIL;
+    }
+
+    // establece Content-Type
+    httpd_resp_set_type(req, "image/jpeg");
+
+    // lee y envia en chunks
+    char chunk[constants::general::FILE_CHUNK_SIZE];
+    size_t bytes_read;
+
+    while ((bytes_read = fread(chunk, 1, sizeof(chunk), f)) > 0) {
+        if (httpd_resp_send_chunk(req, chunk, bytes_read) != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send file chunk");
+            fclose(f);
+            // finaliza la respuesta aunque haya fallado
+            httpd_resp_sendstr_chunk(req, NULL);  
+            
+            return ESP_FAIL;
+        }
+    }
+
+    fclose(f);
+    // finaliza la respuesta correctamente
+    httpd_resp_sendstr_chunk(req, NULL); 
+    return ESP_OK;
 }
 
 void AxoMotorService::on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)

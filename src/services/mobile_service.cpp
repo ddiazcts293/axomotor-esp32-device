@@ -37,7 +37,6 @@ MobileService::MobileService() :
 
 esp_err_t MobileService::setup()
 {
-    network_reg_status_t status;
     esp_err_t err;
  
     // espera 5 segundos para esperar a que el modulo se estabilice
@@ -50,12 +49,6 @@ esp_err_t MobileService::setup()
 
     // verifica si el modulo se inicio correctamente
     if (err != ESP_OK) return err;
-
-    // verifica si el dispositivo está registrado en la red
-    do
-    {
-        m_modem->get_network_reg_status(status);
-    } while (status != network_reg_status_t::REGISTERED);
 
     err = m_modem->sync_time();
     if (err == ESP_OK) {
@@ -80,7 +73,15 @@ esp_err_t MobileService::setup()
     
     err = m_mqtt->set_config(config);
     if (err == ESP_OK) {
-        err = m_mqtt->connect();
+        int retry_num = 5;
+
+        do
+        {
+            err = m_mqtt->connect();
+            if (err == ESP_OK) break;
+            retry_num--;    
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        } while (retry_num != 0);
     }
     
     if (err == ESP_OK) {
@@ -119,7 +120,7 @@ void MobileService::loop()
         m_mqtt->subscribe("device/1/ping");
     }
 
-    event_type_t type = AxoMotor::queue_set.wait_for_event(pdMS_TO_TICKS(30000));
+    event_type_t type = AxoMotor::queue_set.wait_for_event(pdMS_TO_TICKS(5000));
 
     switch (type) 
     {
@@ -155,11 +156,16 @@ void MobileService::loop()
 
 esp_err_t MobileService::publish_position(position_event_t &event)
 {
+    // verifica si no hay un viaje activo
+    if (!AxoMotor::event_group.is_trip_active()) return ESP_ERR_INVALID_STATE;
+
+    char topic[42];
     char payload[180];
     int length;
-    const char topic[] = "trip/688f1945c608c74ce292b148/position";
     const char format[] = "{\"source\":\"vehicleDevice\",\"latitude\":%.6f,\"longitude\":%.6f,\"speed\":%.2f,\"timestamp\":%lld}";
 
+    // establece el tópico
+    snprintf(topic, sizeof(topic), "trip/%s/position", AxoMotor::get_current_trip_id());
     // escribe el mensaje en formato JSON
     length = snprintf(payload, sizeof(payload), format,
         event.latitude, event.longitude, event.speed_over_ground, event.timestamp
@@ -174,11 +180,13 @@ esp_err_t MobileService::publish_position(position_event_t &event)
 
 esp_err_t MobileService::publish_pong(events::ping_event_t &event)
 {
+    char topic[24];
     char payload[32];
     int length;
-    const char topic[] = "device/1/ping/pong";
     const char format[] = "{\"timestamp\":%lld}";
 
+    // establece el tópico
+    snprintf(topic, sizeof(topic), "device/%d/ping/pong", DEVICE_ID);
     // escribe el mensaje en formato JSON
     length = snprintf(payload, sizeof(payload), format, event.timestamp);
     
@@ -191,9 +199,9 @@ esp_err_t MobileService::publish_pong(events::ping_event_t &event)
 
 esp_err_t MobileService::publish_event(events::device_event_t &event)
 {
+    char topic[24];
     char payload[62];
     int length;
-    const char topic[] = "device/1/event";
     const char format[] = "{\"code\":\"%s\",\"timestamp\":%lld}";
     const char *event_code;
 
@@ -253,6 +261,9 @@ esp_err_t MobileService::publish_event(events::device_event_t &event)
         default:
             return ESP_ERR_INVALID_ARG;
     }
+
+    // escribe el topico
+    snprintf(topic, sizeof(topic), "device/%d/event", DEVICE_ID);
 
     // escribe el mensaje en formato JSON
     length = snprintf(

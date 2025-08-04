@@ -27,12 +27,14 @@ namespace axomotor::services
         static const events::GlobalEventGroup event_group;
         
         static void init();
-        static std::string get_current_trip_id();
+        static const char *get_current_trip_id();
+        static uint32_t get_trip_count();
 
     private:
         static char s_current_trip_id[constants::general::TRIP_ID_LENGTH + 1];
+        static char *s_buffer;
         static bool s_is_initialized;
-        static uint32_t s_reset_count;
+        static uint32_t s_trip_count;
         static vprintf_like_t s_default_writer;
         static httpd_handle_t s_httpd_handle;
 
@@ -43,6 +45,7 @@ namespace axomotor::services
         static esp_err_t write_trip_id();
         static esp_err_t delete_trip_id();
         static esp_err_t send_response(httpd_req_t *req, bool success, const char *message = NULL);
+        static int64_t get_query_param_i64(httpd_req_t *req, const char *key, int64_t def = 0);
 
         static void enable_log_to_file();
         static void disable_log_to_file();
