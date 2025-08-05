@@ -194,6 +194,7 @@ esp_err_t SensorService::configure_sensor()
         } 
         
         ESP_LOGW(TAG, "Attempting to configure MPU6050...");
+        attempt_num--;
         vTaskDelay(pdMS_TO_TICKS(250));
     } while (attempt_num != 0);
     

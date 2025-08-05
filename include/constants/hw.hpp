@@ -53,8 +53,8 @@ constexpr const ledc_channel_t LEDC_CHANNEL = LEDC_CHANNEL_0;
 
 namespace sensor {
 
-constexpr const gpio_num_t PIN_SCL = GPIO_NUM_47;
-constexpr const gpio_num_t PIN_SDA = GPIO_NUM_21;
+constexpr const gpio_num_t PIN_SCL = GPIO_NUM_21;
+constexpr const gpio_num_t PIN_SDA = GPIO_NUM_47;
 constexpr const gpio_num_t PIN_VIBRATION_SENSOR = GPIO_NUM_41;
 
 constexpr const i2c_port_t I2C_PORT = I2C_NUM_0;
